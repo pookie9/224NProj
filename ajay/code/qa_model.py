@@ -45,16 +45,22 @@ class Encoder(object):
                  It can be context-level representation, word-level representation,
                  or both.
         """
-        cell_fw=tf.nn.cell.BasicLSTMCell()
-        cell_bw=tf.nn.cell.BasicLSTMCell()
-        (outputs, output_states)=bidirectional_dynamic_rnn(cell_fw,cell_bw,inputs,initial_state_fw=encoder_state_input,initial_state_bw=encoder_state_input,sequence_length=masks) #Maybe incorrect initial states? https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/rnn.py#L313
-        
-        #Maybe masks is incorrect? Should be integer lengths, not boolean masks
-        hidden_states=tf.concat(output_states,1)
-        #tf.concat(outputs,2)
-        #use attention as weights to combine the outputs together
-        #given the ouptut of the question_encoder calculate the attention for the context paragraph
-        return hidden_states
+        cell_fw = tf.nn.rnn_cell.BasicLSTMCell()
+        cell_bw = tf.nn.rnn_cell.BasicLSTMCell()
+
+        # note: inputs need to be zero-padded to max_time length
+        # note: masks must contain actual length of every input in the batch
+        outputs, output_states = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, inputs,
+                                                                   sequence_length=masks, 
+                                                                   initial_state_fw=encoder_state_input, 
+                                                                   initial_state_bw=encoder_state_input)
+
+        # TODO: see shape of output_states
+        # concatenate hidden vectors of both directions together
+        encoded_outputs = tf.concat(outputs, 2)
+
+        # return all hidden states and the final hidden state
+        return encoded_outputs, encoded_outputs[:, -1, :]
 
 
 class Decoder(object):
@@ -86,19 +92,19 @@ class QASystem(object):
         :param args: pass in more arguments as needed
         """
         self.pretrained_embeddings = pretrained_embeddings
-        self.question_encoder, self.context_encoder = encoder
+        self.question_encoder, self.context_encoder = encoder # unpack tuple of encoders
         self.decoder = decoder
         self.max_ctx_len = max_ctx_len
         self.max_q_len = max_q_len
         self.embed_size = encoder[0].vocab_dim
         # ==== set up placeholder tokens ========
 
-         self.context_placeholder = tf.placeholder(tf.int32, shape=(None, max_ctx_len), name='context_placeholder')
-         self.question_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_q_len), name='question_placeholder')
-         self.answer_span_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_length), name='answer_span_placeholder')
-         self.mask_q_placeholder = tf.placeholder(tf.int32, shape=(None,), name='mask_q_placeholder')
-         self.mask_ctx_placeholder = tf.placeholder(tf.int32, shape=(None,), name='mask_ctx_placeholder')
-         self.dropout_placeholder = tf.placeholder(tf.float32, shape=(), name='dropout_placeholder')
+        self.context_placeholder = tf.placeholder(tf.int32, shape=(None, max_ctx_len), name='context_placeholder')
+        self.question_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_q_len), name='question_placeholder')
+        self.answer_span_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_length), name='answer_span_placeholder')
+        self.mask_q_placeholder = tf.placeholder(tf.int32, shape=(None,), name='mask_q_placeholder')
+        self.mask_ctx_placeholder = tf.placeholder(tf.int32, shape=(None,), name='mask_ctx_placeholder')
+        self.dropout_placeholder = tf.placeholder(tf.float32, shape=(), name='dropout_placeholder')
 
         # ==== assemble pieces ====
         with tf.variable_scope("qa", initializer=tf.uniform_unit_scaling_initializer(1.0)):
@@ -122,6 +128,35 @@ class QASystem(object):
             padded_sentence.append(sentence)
         return (padded_sequence, mask)
 
+    def setup_attention_vector(self, context_vectors, question_rep):
+        #context_vectors is a list of the hidden states of the context
+        #question_rep are the final forward and backward states of the encoder for the question concatenated
+        #Does part 3 in original handout
+        W = tf.get_variable("W", shape=[context_vectors[0].get_shape()[0], question_rep.get_shape()[0]],
+                                 initializer=tf.contrib.layers.xavier_initializer())
+        #attention = [tf.nn.softmax(tf.matmul(tf.matmul(tf.transpose(ctx), W), question_rep)) for ctx in context_vectors]
+        
+
+        # TODO: ask TA how to handle batch size stuff here...
+        attention = tf.nn.softmax(tf.sum(tf.matmul(tf.matmul(question_rep, W), context_vectors)))
+        return attention
+
+    def concat_most_aligned(self, question_states, cur_ctx):
+        #Does part 4 in original handout
+        #question_states is a list of all of the hidden states for the question, cur_ctx is the current context word
+        #returns a concatenation of [cur_ctx, q*] where q* is the most aligned question word
+        U = tf.get_variable("U", shape=[cur_ctx.get_shape()[0], question_states[0].get_shape()[0]],
+                                 initializer=tf.contrib.layers.xavier_initializer())#maybe need to add reuse variable?
+        attention = [tf.nn.softmax(tf.matmul(tf.matmul(tf.transpose(cur_ctx), W), q)) for q in question_states]
+        most_aligned = (0.0, None)
+
+        # TODO: change this to completely use tensorflow functions (like argmax)
+        for i in range(len(attention)):
+            if attention[i] > most_aligned:
+                most_aligned = (attention[i], question_states[i])
+        return tf.concat([cur_ctx,most_aligned[0]], 1)
+
+
     def setup_system(self):
         """
         After your modularized implementation of encoder and decoder
@@ -129,8 +164,13 @@ class QASystem(object):
         to assemble your reading comprehension system!
         :return:
         """
-        raise NotImplementedError("Connect all parts of your system here!")
-
+        question_states, question_rep = self.question_encoder.encode(self.question_placeholder, self.mask_q_placeholder, None)
+        ctx_states, ctx_rep = self.context_encoder.encode(self.context_placeholder, self.mask_ctx_placeholder, None)
+        attention = setup_attention_vector(question_rep, ctx_states)
+        weighted_ctx = tf.matmul(self.question_placeholder, attention)#(hidden_size x max_ctx_len) (max_ctx_len x 1)=>(hidden_size x 1)
+        
+        # TODO: how to do stuff like packing operations together
+        new_ctx = [self.concat_most_aligned(question_states, ctx) for ctx in ctx_states]
 
     def setup_loss(self):
         """
@@ -154,7 +194,7 @@ class QASystem(object):
             context_embeddings = tf.nn.embedding_lookup(embedding, self.context_placeholder)
             self.context_embeddings = tf.reshape(embeddings, [-1, self.max_ctx_len, self.embed_size])
 
-            question_embeddings = tf.nn.embedding_lookup(embedding,self.question_placeholder)
+            question_embeddings = tf.nn.embedding_lookup(embedding, self.question_placeholder)
             self.question_embeddings = tf.reshape(embeddings, [-1, self.max_q_len, self.embed_size])
 
 
@@ -298,9 +338,9 @@ class QASystem(object):
         num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
         toc = time.time()
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
-        mask=[None,None]
-        dataset[0],mask[0]=self.pad(dataset[0])#context_ids
-        dataset[1],mask[1]=self.pad(dataset[1])$#question_ids
+        mask = [None, None]
+        dataset[0], mask[0] = self.pad(dataset[0]) #context_ids
+        dataset[1], mask[1] = self.pad(dataset[1]) #question_ids
         for i in range(1,len(dataset[0])):
-            assert len(dataset[0][i])==len(dataset[0][i-1]), "Incorrectly padded context"
-            assert len(dataset[1][i])==len(dataset[1][i-1]), "Incorrectly padded question"
+            assert len(dataset[0][i]) == len(dataset[0][i - 1]), "Incorrectly padded context"
+            assert len(dataset[1][i]) == len(dataset[1][i - 1]), "Incorrectly padded question"
