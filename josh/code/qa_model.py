@@ -47,7 +47,7 @@ class Encoder(object):
         """
         cell_fw=tf.nn.cell.BasicLSTMCell()
         cell_bw=tf.nn.cell.BasicLSTMCell()
-        (outputs, hidden_states)=bidirectional_dynamic_rnn(cell_fw,cell_bw,inputs,initial_state_fw=encoder_state_input,initial_state_bw=encoder_state_input,sequence_length=masks) #Maybe incorrect initial states? https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/rnn.py#L313
+        (outputs, hidden_states)=tf.nn.bidirectional_dynamic_rnn(cell_fw,cell_bw,inputs,initial_state_fw=encoder_state_input,initial_state_bw=encoder_state_input,sequence_length=masks) #Maybe incorrect initial states? https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/rnn.py#L313
         
         #Maybe masks is incorrect? Should be integer lengths, not boolean masks
         outputs=tf.concat(output_states,1)
@@ -107,6 +107,7 @@ class QASystem(object):
             self.setup_loss()
 
         # ==== set up training/updating procedure ====
+
         pass
 
     def pad(self,sequence):

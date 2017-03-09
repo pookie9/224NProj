@@ -53,9 +53,8 @@ class Encoder(object):
         cell_bw = tf.nn.rnn_cell.BasicLSTMCell()
 
         (outputs, output_states) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, inputs,sequence_length=masks,initial_state_fw = encoder_state_input,initial_state_bw = encoder_state_input)
-        encoded_outputs = tf.concat(output_states, 1)
-        states = tf.concat(output,2)
-        return states,encoded_outputs
+        states = tf.concat(outputs,2)
+        return states,states[:,-1,:]
 
 
 class Decoder(object):
@@ -113,6 +112,38 @@ class QASystem(object):
         # ==== set up training/updating procedure ====
         pass
 
+    def pad(self,sequence):
+        #assumes sequence is a list of lists of word, pads to the longest "sentence"
+        #returns (padded_sequence, mask)
+        from qa_data import PAD_ID
+        max_length=max(map(len,sequence))
+        padded_sequence=[]
+        mask=[]
+        for sentence in sequence:
+            mask.append(len(sentence))
+            sentence.extend([PAD_ID]*(max_length-len(sequence)))
+            padded_sentence.append(sentence)
+        return (padded_sequence,mask)
+
+    def setup_attention_vector(self,context_vectors,question_rep):
+        #context_vectors is a list of the hidden states of the context
+        #question_rep are the final forward and backward states of the encoder for the question concatenated
+        #Does part 3 in original handout
+        W=tf.get_variable("W",shape=[context_vectors[0].get_shape()[0],question_rep.get_shape()[0]],initializer=tf.contrib.layers.xavier_initializer())
+        attention=[tf.nn.softmax(tf.matmul(tf.matmul(tf.transpose(ctx),W),question_rep)) for ctx in context_vectors]
+        
+    def concat_most_aligned(self,question_states,cur_ctx):
+        #Does part 4 in original handout
+        #question_states is a list of all of the hidden states for the question, cur_ctx is the current context word
+        #returns a concatenation of [cur_ctx, q*] where q* is the most aligned question word
+        U=tf.get_variable("U",shape=[cur_ctx.get_shape()[0],question_states[0].get_shape()[0]],initializer=tf.contrib.layers.xavier_initializer())#maybe need to add reuse variable?
+        attention=[tf.nn.softmax(tf.matmul(tf.matmul(tf.transpose(cur_ctx),W),q)) for q in question_states]
+        most_aligned=(0.0,None)
+        for i in range(len(attention)):
+            if attention[i]>most_aligned:
+                most_aligned=(attention[i],question_states[i])
+        return tf.concat([cur_ctx,most_aligned[0]],1)
+
 
     def setup_system(self):
         """
@@ -123,6 +154,12 @@ class QASystem(object):
         """
         question_states,h_q = self.question_encoder.encode(self.question_inputs,self.max_q_len,None)
         context_states,h_c = self.context_encoder.encode(self.context_inputs,self.max_c_len,None)
+
+        # step 3
+        attention=setup_attention_vector(context_states,h_q)
+        # step 4
+        weighted_ctx=tf.matmul(context_states,attention)#(hidden_size x max_ctx_len) (max_ctx_len x 1)=>(hidden_size x 1)
+        new_ctx=[self.concat_most_aligned(question_states, ctx) for ctx in context_states]
 
 
     def setup_loss(self):
