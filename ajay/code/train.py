@@ -127,8 +127,8 @@ def main(_):
     assert len(context_ids)==len(question_ids)==len(answer_spans), "Mismatch between context, questions, and answer lengths"
 
     question_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
-    decoder = Decoder(output_size=FLAGS.output_size)
     context_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
+    decoder = Decoder(output_size=FLAGS.output_size)
 
     qa = QASystem((question_encoder,context_encoder), (decoder),pretrained_embeddings=embeddings,max_ctx_len=max_ctx_len,max_q_len=max_q_len)
 

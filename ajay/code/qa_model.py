@@ -80,7 +80,18 @@ class Decoder(object):
         :return:
         """
 
-        return
+        W_start = tf.get_variable("W_start", shape=(self.output_size, self.output_size),
+                initializer=tf.contrib.layers.xavier_initializer())
+        b_start = tf.get_variable("b_start", shape=(self.output_size))
+
+        W_end = tf.get_variable("W_end", shape=(self.output_size, self.output_size),
+                initializer=tf.contrib.layers.xavier_initializer())
+        b_end = tf.get_variable("b_end", shape=(self.output_size))
+
+        start_probs = tf.matmul(knowledge_rep, W_start) + b_start
+        end_probs = tf.matmul(knowledge_rep, W_end) + b_end
+
+        return start_probs, end_probs
 
 class QASystem(object):
     def __init__(self, encoder, decoder, pretrained_embeddings, max_ctx_len, max_q_len):
@@ -164,13 +175,22 @@ class QASystem(object):
         to assemble your reading comprehension system!
         :return:
         """
-        question_states, question_rep = self.question_encoder.encode(self.question_placeholder, self.mask_q_placeholder, None)
-        ctx_states, ctx_rep = self.context_encoder.encode(self.context_placeholder, self.mask_ctx_placeholder, None)
-        attention = setup_attention_vector(question_rep, ctx_states)
-        weighted_ctx = tf.matmul(self.question_placeholder, attention)#(hidden_size x max_ctx_len) (max_ctx_len x 1)=>(hidden_size x 1)
+
+        # simple encoder stuff here
+        question_states, final_question_state = self.question_encoder.encode(self.question_embeddings, self.mask_q_placeholder, None)
+        ctx_states, final_ctx_state = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, final_question_state)
+
+        # decoder takes encoded representation to probability dists over start / end index
+        self.start_probs, self.end_probs = self.decoder.decode(final_ctx_state)
+
+        # TODO: is this correct for the baseline?
+        # question_states, question_rep = self.question_encoder.encode(self.question_placeholder, self.mask_q_placeholder, None)
+        # ctx_states, ctx_rep = self.context_encoder.encode(self.context_placeholder, self.mask_ctx_placeholder, None)
+        # attention = setup_attention_vector(question_rep, ctx_states)
+        # weighted_ctx = tf.matmul(self.question_placeholder, attention)#(hidden_size x max_ctx_len) (max_ctx_len x 1)=>(hidden_size x 1)
         
         # TODO: how to do stuff like packing operations together
-        new_ctx = [self.concat_most_aligned(question_states, ctx) for ctx in ctx_states]
+        #new_ctx = [self.concat_most_aligned(question_states, ctx) for ctx in ctx_states]
 
     def setup_loss(self):
         """
@@ -178,7 +198,9 @@ class QASystem(object):
         :return:
         """
         with vs.variable_scope("loss"):
-            pass
+            self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs, self.answer_span_placeholder[:, 0])) + 
+                   tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs, self.answer_span_placeholder[:, 1]))
+            #pass
 
     def setup_embeddings(self):
         """
@@ -188,15 +210,11 @@ class QASystem(object):
         with vs.variable_scope("embeddings"):
             embedding = tf.Variable(self.pretrained_embeddings,name='embedding') #only learn one common embedding
 
-            #context_embedding=tf.Variable(self.pretrained_embeddings,name="context_embedding")
-            #question_embedding=tf.Variable(self.pretrained_embeddings,name="question_embedding")
-
-            context_embeddings = tf.nn.embedding_lookup(embedding, self.context_placeholder)
-            self.context_embeddings = tf.reshape(embeddings, [-1, self.max_ctx_len, self.embed_size])
-
             question_embeddings = tf.nn.embedding_lookup(embedding, self.question_placeholder)
             self.question_embeddings = tf.reshape(embeddings, [-1, self.max_q_len, self.embed_size])
 
+            context_embeddings = tf.nn.embedding_lookup(embedding, self.context_placeholder)
+            self.context_embeddings = tf.reshape(embeddings, [-1, self.max_ctx_len, self.embed_size])
 
 
     def optimize(self, session, train_x, train_y):
