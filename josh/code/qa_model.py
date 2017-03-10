@@ -47,10 +47,9 @@ class Encoder(object):
         """
         cell_fw=tf.nn.cell.BasicLSTMCell()
         cell_bw=tf.nn.cell.BasicLSTMCell()
-        (outputs, hidden_states)=bidirectional_dynamic_rnn(cell_fw,cell_bw,inputs,initial_state_fw=encoder_state_input,initial_state_bw=encoder_state_input,sequence_length=masks) #Maybe incorrect initial states? https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/rnn.py#L313
+        (outputs, hidden_states)=tf.bidirectional_dynamic_rnn(cell_fw,cell_bw,inputs,initial_state_fw=encoder_state_input,initial_state_bw=encoder_state_input,sequence_length=masks) #Maybe incorrect initial states? https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/rnn.py#L313
         
-        #Maybe masks is incorrect? Should be integer lengths, not boolean masks
-        outputs=tf.concat(output_states,1)
+        outputs=tf.concat(output,1)
         #tf.concat(outputs,2)
         #use attention as weights to combine the outputs together
         #given the ouptut of the question_encoder calculate the attention for the context paragraph
@@ -150,12 +149,12 @@ class QASystem(object):
         """
         
         question_states,question_rep=self.encoders[0].encode(self.question_placeholder,self.mask_q_placeholder,None)
-        ctx_states,ctx_rep=self.encoders[1].encode(self.context_placeholder,self.mask_ctx_placeholder,None)
-        attention=setup_attention_vector(question_rep,ctx_states)
-        weighted_ctx=tf.matmul(self.question_placeholder,attention)#(hidden_size x max_ctx_len) (max_ctx_len x 1)=>(hidden_size x 1)
-        new_ctx=[self.concat_most_aligned(question_states, ctx) for ctx in ctx_states]
-        
-            
+        ctx_states,ctx_rep=self.encoders[1].encode(self.context_placeholder,self.mask_ctx_placeholder,encoder_state_input=question_rep)
+        #attention=setup_attention_vector(question_rep,ctx_states)
+        #weighted_ctx=tf.matmul(ctx_states,attention)#(hidden_size x max_ctx_len) (max_ctx_len x 1)=>(hidden_size x 1)
+        #new_ctx=[self.concat_most_aligned(question_states, ctx) for ctx in ctx_states]
+        #weighted_ctx is the initialization of the decoder, new_ctx is the inputs is the inputs into the decoder
+        self.output=self.decoder.decode(ctx_states)
 
 
     def setup_loss(self):
@@ -171,6 +170,7 @@ class QASystem(object):
         Loads distributed word representations based on placeholder tokens
         :return:
         """
+        
         with vs.variable_scope("embeddings"):
             embedding=tf.Variable(self.pretrained_embeddings,name='embedding')#only learn one common embedding
 
@@ -203,11 +203,13 @@ class QASystem(object):
         return outputs
 
     def test(self, session, valid_x, valid_y):
+
         """
         in here you should compute a cost for your validation set
         and tune your hyperparameters according to the validation set performance
         :return:
         """
+
         input_feed = {}
 
         # fill in this feed_dictionary like:
@@ -220,11 +222,13 @@ class QASystem(object):
         return outputs
 
     def decode(self, session, test_x):
+
         """
         Returns the probability distribution over different positions in the paragraph
         so that other methods like self.answer() will be able to work properly
         :return:
         """
+        
         input_feed = {}
 
         # fill in this feed_dictionary like:
