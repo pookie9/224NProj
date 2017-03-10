@@ -57,7 +57,7 @@ class Encoder(object):
                                                                    initial_state_bw=encoder_state_input)
 
         # TODO: see shape of output_states
-        encoded_outputs = tf.concat(output_states, 1)
+        encoded_outputs = tf.concat(outputs, 2)
 
         return encoded_outputs
 

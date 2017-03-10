@@ -12,6 +12,9 @@ from tensorflow.python.ops import variable_scope as vs
 
 from evaluate import exact_match_score, f1_score
 
+from qa_data import PAD_ID
+
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -45,15 +48,13 @@ class Encoder(object):
                  It can be context-level representation, word-level representation,
                  or both.
         """
-        cell_fw=tf.nn.cell.BasicLSTMCell()
-        cell_bw=tf.nn.cell.BasicLSTMCell()
-        (outputs, hidden_states)=tf.bidirectional_dynamic_rnn(cell_fw,cell_bw,inputs,initial_state_fw=encoder_state_input,initial_state_bw=encoder_state_input,sequence_length=masks) #Maybe incorrect initial states? https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/rnn.py#L313
-        
-        outputs=tf.concat(output,1)
-        #tf.concat(outputs,2)
-        #use attention as weights to combine the outputs together
-        #given the ouptut of the question_encoder calculate the attention for the context paragraph
-        return (outputs,hidden_states)
+
+        cell_fw = tf.nn.rnn_cell.BasicLSTMCell()
+        cell_bw = tf.nn.rnn_cell.BasicLSTMCell()
+
+        (outputs, output_states) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, inputs,sequence_length=masks,initial_state_fw = encoder_state_input,initial_state_bw = encoder_state_input)
+        states = tf.concat(outputs,2)
+        return states,states[:,-1,:]
 
 
 class Decoder(object):
@@ -63,7 +64,7 @@ class Decoder(object):
     def decode(self, knowledge_rep):
         """
         takes in a knowledge representation
-        and output a probability estimation over
+        and outputs a probability estimation over
         all paragraph tokens on which token should be
         the start of the answer span, and which should be
         the end of the answer span.
@@ -73,10 +74,12 @@ class Decoder(object):
         :return:
         """
 
+
+
         return
 
 class QASystem(object):
-    def __init__(self, encoder, decoder, pretrained_embeddings,max_ctx_len,max_q_len):
+    def __init__(self, encoder, decoder, pretrained_embeddings,max_question_length,max_context_length):
         """
         Initializes your System
 
@@ -84,24 +87,25 @@ class QASystem(object):
         :param decoder: a decoder that you constructed in train.py
         :param args: pass in more arguments as needed
         """
-        self.pretrained_embeddings=pretrained_embeddings
-        self.encoders=encoder
-        self.decoder=decoder
-        self.max_ctx_len=max_ctx_len
-        self.max_q_len=max_q_len
-        self.embed_size=encoder[0].vocab_dim
-        # ==== set up placeholder tokens ========
 
-        self.context_placeholder=tf.placeholder(tf.int32,shape=(None,max_ctx_len),name='context_placeholder')
-        self.question_placeholder=tf.placeholder(tf.int32,shape=(None,self.max_q_len),name='question_placeholder')
-        self.answer_span_placeholder=tf.placeholder(tf.int32,shape=(None,2),name='answer_span_placeholder')
-        self.mask_q_placeholder=tf.placeholder(tf.int32,shape=(None,),name='mask_q_placeholder')#Maybe no comma in size?
-        self.mask_ctx_placeholder=tf.placeholder(tf.int32,shape=(None,),name='mask_ctx_placeholder')#Maybe no comma in size?
-        self.dropout_placeholder=tf.placeholder(tf.float32,shape=(),name='dropout_placeholder')
+        # ==== set up placeholder tokens ========
+        self.question_encoder = encoder[0] 
+        self.context_encoder = encoder[1]
+        self.pretrained_embeddings = embeddings
+        self.max_q_len = max_question_length
+        self.max_c_len = max_context_length
+        self.embed_size = encoder[0].vocab_dim
+
+        self.question_input_placeholder = tf.placeholder(tf.int32,[None,max_question_length])
+        self.context_input_placeholder = tf.placeholder(tf.int32,[None,max_context_length])
+        self.labels_placeholder = tf.placeholder(tf.int32,[None,2])
+        self.question_mask_placeholder = tf.placeholder(tf.int32,[None,])
+        self.context_mask_placeholder = tf.placeholder(tf.int32,[None,])
+        self.dropout_placeholder = tf.placeholder(tf.float32,())
 
         # ==== assemble pieces ====
         with tf.variable_scope("qa", initializer=tf.uniform_unit_scaling_initializer(1.0)):
-            self.setup_embeddings()
+            question_inputs,context_inputs = self.setup_embeddings()
             self.setup_system()
             self.setup_loss()
 
@@ -139,7 +143,8 @@ class QASystem(object):
             if attention[i]>most_aligned:
                 most_aligned=(attention[i],question_states[i])
         return tf.concat([cur_ctx,most_aligned[0]],1)
-        
+
+
     def setup_system(self):
         """
         After your modularized implementation of encoder and decoder
@@ -147,14 +152,14 @@ class QASystem(object):
         to assemble your reading comprehension system!
         :return:
         """
-        
-        question_states,question_rep=self.encoders[0].encode(self.question_placeholder,self.mask_q_placeholder,None)
-        ctx_states,ctx_rep=self.encoders[1].encode(self.context_placeholder,self.mask_ctx_placeholder,encoder_state_input=question_rep)
-        #attention=setup_attention_vector(question_rep,ctx_states)
-        #weighted_ctx=tf.matmul(ctx_states,attention)#(hidden_size x max_ctx_len) (max_ctx_len x 1)=>(hidden_size x 1)
-        #new_ctx=[self.concat_most_aligned(question_states, ctx) for ctx in ctx_states]
-        #weighted_ctx is the initialization of the decoder, new_ctx is the inputs is the inputs into the decoder
-        self.output=self.decoder.decode(ctx_states)
+        question_states,h_q = self.question_encoder.encode(self.question_inputs,self.max_q_len,None)
+        context_states,h_c = self.context_encoder.encode(self.context_inputs,self.max_c_len,None)
+
+        # step 3
+        attention=setup_attention_vector(context_states,h_q)
+        # step 4
+        weighted_ctx=tf.matmul(context_states,attention)#(hidden_size x max_ctx_len) (max_ctx_len x 1)=>(hidden_size x 1)
+        new_ctx=[self.concat_most_aligned(question_states, ctx) for ctx in context_states]
 
 
     def setup_loss(self):
@@ -170,20 +175,15 @@ class QASystem(object):
         Loads distributed word representations based on placeholder tokens
         :return:
         """
-        
         with vs.variable_scope("embeddings"):
-            embedding=tf.Variable(self.pretrained_embeddings,name='embedding')#only learn one common embedding
+            embedding_tensor = tf.Variable(self.pretrained_embeddings)
 
-            #context_embedding=tf.Variable(self.pretrained_embeddings,name="context_embedding")
-            #question_embedding=tf.Variable(self.pretrained_embeddings,name="question_embedding")
+            question_embeddings = tf.nn.embedding_lookup(embedding_tensor, self.question_input_placeholder)
+            context_embeddings = tf.nn.embedding_lookup(embedding_tensor, self.context_input_placeholder)
 
-            context_embeddings=tf.nn.embedding_lookup(embedding,self.context_placeholder)
-            self.context_embeddings=tf.reshape(embeddings,[-1,self.max_ctx_len,self.embed_size])
-
-            question_embeddings=tf.nn.embedding_lookup(embedding,self.question_placeholder)
-            self.question_embeddings=tf.reshape(embeddings,[-1,self.max_q_len,self.embed_size])
-
-
+            question_embeddings = tf.reshape(question_embeddings, [-1, self.max_q_len, self.embed_size])
+            context_embeddings = tf.reshape(context_embeddings, [-1, self.max_c_len, self.embed_size])
+            return question_embeddings,context_embeddings
 
     def optimize(self, session, train_x, train_y):
         """
@@ -203,13 +203,11 @@ class QASystem(object):
         return outputs
 
     def test(self, session, valid_x, valid_y):
-
         """
         in here you should compute a cost for your validation set
         and tune your hyperparameters according to the validation set performance
         :return:
         """
-
         input_feed = {}
 
         # fill in this feed_dictionary like:
@@ -222,13 +220,11 @@ class QASystem(object):
         return outputs
 
     def decode(self, session, test_x):
-
         """
         Returns the probability distribution over different positions in the paragraph
         so that other methods like self.answer() will be able to work properly
         :return:
         """
-        
         input_feed = {}
 
         # fill in this feed_dictionary like:
@@ -328,9 +324,3 @@ class QASystem(object):
         num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
         toc = time.time()
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
-        mask=[None,None]
-        dataset[0],mask[0]=self.pad(dataset[0])#context_ids
-        dataset[1],mask[1]=self.pad(dataset[1])$#question_ids
-        for i in range(1,len(dataset[0])):
-            assert len(dataset[0][i])==len(dataset[0][i-1]), "Incorrectly padded context"
-            assert len(dataset[1][i])==len(dataset[1][i-1]), "Incorrectly padded question"
