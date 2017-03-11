@@ -108,29 +108,34 @@ def main(_):
     vocab_path = FLAGS.vocab_path or pjoin(FLAGS.data_dir, "vocab.dat")
     vocab, rev_vocab = initialize_vocab(vocab_path)
 
-    context_ids_path =pjoin(FLAGS.data_dir, "train.ids.context")
-    question_ids_path =pjoin(FLAGS.data_dir, "train.ids.question")
-    answer_span_path =pjoin(FLAGS.data_dir, "train.span")
+    context_ids_path = pjoin(FLAGS.data_dir, "train.ids.context")
+    question_ids_path = pjoin(FLAGS.data_dir, "train.ids.question")
+    answer_span_path = pjoin(FLAGS.data_dir, "train.span")
 
-    context_ids=initialize_data(context_ids_path)
-    question_ids=initialize_data(question_ids_path)
-    answer_spans=initialize_data(answer_span_path)
-    dataset=[context_ids,question_ids,answer_spans]
+    context_ids = initialize_data(context_ids_path)
+    question_ids = initialize_data(question_ids_path)
+    answer_spans = initialize_data(answer_span_path)
+    dataset = [context_ids, question_ids, answer_spans]
 
-    max_ctx_len=max(map(len,context_ids))
-    max_q_len=max(map(len,question_ids))
+    max_ctx_len = max(map(len, context_ids))
+    max_q_len = max(map(len, question_ids))
     
-    embeddings=initialize_embeddings(embed_path)
+    embeddings = initialize_embeddings(embed_path)
     
-    assert len(vocab)==embeddings.shape[0], "Mismatch between embedding shape and vocab length"
-    assert embeddings.shape[1]==FLAGS.embedding_size, "Mismatch between embedding shape and FLAGS"
-    assert len(context_ids)==len(question_ids)==len(answer_spans), "Mismatch between context, questions, and answer lengths"
+    assert len(vocab) == embeddings.shape[0], "Mismatch between embedding shape and vocab length"
+    assert embeddings.shape[1] == FLAGS.embedding_size, "Mismatch between embedding shape and FLAGS"
+    assert len(context_ids) == len(question_ids) == len(answer_spans), "Mismatch between context, questions, and answer lengths"
 
-    question_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
-    context_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
+    question_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, name="question_encoder")
+    context_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, name="context_encoder")
     decoder = Decoder(output_size=FLAGS.output_size)
 
-    qa = QASystem((question_encoder,context_encoder), (decoder),pretrained_embeddings=embeddings,max_ctx_len=max_ctx_len,max_q_len=max_q_len)
+    qa = QASystem(encoder=(question_encoder,context_encoder), 
+                  decoder=decoder, 
+                  pretrained_embeddings=embeddings,
+                  max_ctx_len=max_ctx_len,
+                  max_q_len=max_q_len,
+                  flags=FLAGS)
 
     if not os.path.exists(FLAGS.log_dir):
         os.makedirs(FLAGS.log_dir)
