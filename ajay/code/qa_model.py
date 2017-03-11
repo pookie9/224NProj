@@ -55,10 +55,11 @@ class Encoder(object):
         """
         with tf.variable_scope(self.name):
             cell = tf.nn.rnn_cell.BasicLSTMCell(self.size)
-            outputs, _ = tf.nn.dynamic_rnn(cell, inputs, 
+            outputs, final_state = tf.nn.dynamic_rnn(cell, inputs, 
                                            sequence_length=masks, 
-                                           dtype=tf.float32)
-        return outputs, outputs[:, -1, :]
+                                           dtype=tf.float32,
+                                           initial_state=encoder_state_input)
+        return outputs, final_state
 
         # cell_fw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
         # cell_bw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
@@ -88,6 +89,7 @@ class Decoder(object):
                               decided by how you choose to implement the encoder
         :return:
         """
+        knowledge_rep = knowledge_rep[-1]
         input_size = knowledge_rep.get_shape()[-1]
         W_start = tf.get_variable("W_start", shape=(input_size, self.output_size),
                 initializer=tf.contrib.layers.xavier_initializer())
