@@ -12,6 +12,8 @@ from tensorflow.python.ops import variable_scope as vs
 
 from evaluate import exact_match_score, f1_score
 
+#from train import FLAGS
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -26,11 +28,17 @@ def get_optimizer(opt):
 
 
 class Encoder(object):
-    def __init__(self, size, vocab_dim):
+    """
+    Arguments:
+        -size: dimension of the hidden states
+        -vocab_dim: dimension of the embeddings
+    """
+    def __init__(self, size, vocab_dim, name):
         self.size = size
         self.vocab_dim = vocab_dim
+        self.name = name
 
-    def encode(self, inputs, masks, encoder_state_input):
+    def encode(self, inputs, masks, encoder_state_input=None):
         """
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
@@ -45,23 +53,23 @@ class Encoder(object):
                  It can be context-level representation, word-level representation,
                  or both.
         """
-        cell_fw = tf.nn.rnn_cell.BasicLSTMCell()
-        cell_bw = tf.nn.rnn_cell.BasicLSTMCell()
+        with tf.variable_scope(self.name):
+            cell = tf.nn.rnn_cell.BasicLSTMCell(self.size)
+            outputs, _ = tf.nn.dynamic_rnn(cell, inputs, 
+                                           sequence_length=masks, 
+                                           dtype=tf.float32)
+        return outputs, outputs[:, -1, :]
 
-        # note: inputs need to be zero-padded to max_time length
-        # note: masks must contain actual length of every input in the batch
+        # cell_fw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
+        # cell_bw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
 
-        outputs, output_states = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, inputs,
-                                                                   sequence_length=masks, 
-                                                                   initial_state_fw=encoder_state_input, 
-                                                                   initial_state_bw=encoder_state_input)
 
-        # TODO: see shape of output_states
-        # concatenate hidden vectors of both directions together
-        encoded_outputs = tf.concat(outputs, 2)
+        # # TODO: see shape of output_states
+        # # concatenate hidden vectors of both directions together
+        # encoded_outputs = tf.concat(outputs, 2)
 
-        # return all hidden states and the final hidden state
-        return encoded_outputs, encoded_outputs[:, -1, :]
+        # # return all hidden states and the final hidden state
+        # return encoded_outputs, encoded_outputs[:, -1, :]
 
 
 class Decoder(object):
@@ -80,12 +88,12 @@ class Decoder(object):
                               decided by how you choose to implement the encoder
         :return:
         """
-
-        W_start = tf.get_variable("W_start", shape=(self.output_size, self.output_size),
+        input_size = knowledge_rep.get_shape()[-1]
+        W_start = tf.get_variable("W_start", shape=(input_size, self.output_size),
                 initializer=tf.contrib.layers.xavier_initializer())
         b_start = tf.get_variable("b_start", shape=(self.output_size))
 
-        W_end = tf.get_variable("W_end", shape=(self.output_size, self.output_size),
+        W_end = tf.get_variable("W_end", shape=(input_size, self.output_size),
                 initializer=tf.contrib.layers.xavier_initializer())
         b_end = tf.get_variable("b_end", shape=(self.output_size))
 
@@ -95,7 +103,7 @@ class Decoder(object):
         return start_probs, end_probs
 
 class QASystem(object):
-    def __init__(self, encoder, decoder, pretrained_embeddings, max_ctx_len, max_q_len):
+    def __init__(self, encoder, decoder, pretrained_embeddings, max_ctx_len, max_q_len, flags):
         """
         Initializes your System
 
@@ -109,11 +117,12 @@ class QASystem(object):
         self.max_ctx_len = max_ctx_len
         self.max_q_len = max_q_len
         self.embed_size = encoder[0].vocab_dim
+        self.flags = flags
         # ==== set up placeholder tokens ========
 
-        self.context_placeholder = tf.placeholder(tf.int32, shape=(None, max_ctx_len), name='context_placeholder')
+        self.context_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_ctx_len), name='context_placeholder')
         self.question_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_q_len), name='question_placeholder')
-        self.answer_span_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_length), name='answer_span_placeholder')
+        self.answer_span_placeholder = tf.placeholder(tf.int32, shape=(None, 2), name='answer_span_placeholder')
         self.mask_q_placeholder = tf.placeholder(tf.int32, shape=(None,), name='mask_q_placeholder')
         self.mask_ctx_placeholder = tf.placeholder(tf.int32, shape=(None,), name='mask_ctx_placeholder')
         self.dropout_placeholder = tf.placeholder(tf.float32, shape=(), name='dropout_placeholder')
@@ -125,8 +134,6 @@ class QASystem(object):
             self.setup_loss()
 
         # ==== set up training/updating procedure ====
-
-        
 
         pass
 
@@ -143,33 +150,33 @@ class QASystem(object):
             padded_sentence.append(sentence)
         return (padded_sequence, mask)
 
-    def setup_attention_vector(self, context_vectors, question_rep):
-        #context_vectors is a list of the hidden states of the context
-        #question_rep are the final forward and backward states of the encoder for the question concatenated
-        #Does part 3 in original handout
-        W = tf.get_variable("W", shape=[context_vectors[0].get_shape()[0], question_rep.get_shape()[0]],
-                                 initializer=tf.contrib.layers.xavier_initializer())
-        #attention = [tf.nn.softmax(tf.matmul(tf.matmul(tf.transpose(ctx), W), question_rep)) for ctx in context_vectors]
+    # def setup_attention_vector(self, context_vectors, question_rep):
+    #     #context_vectors is a list of the hidden states of the context
+    #     #question_rep are the final forward and backward states of the encoder for the question concatenated
+    #     #Does part 3 in original handout
+    #     W = tf.get_variable("W", shape=[context_vectors[0].get_shape()[0], question_rep.get_shape()[0]],
+    #                              initializer=tf.contrib.layers.xavier_initializer())
+    #     #attention = [tf.nn.softmax(tf.matmul(tf.matmul(tf.transpose(ctx), W), question_rep)) for ctx in context_vectors]
         
 
-        # TODO: ask TA how to handle batch size stuff here...
-        attention = tf.nn.softmax(tf.sum(tf.matmul(tf.matmul(question_rep, W), context_vectors)))
-        return attention
+    #     # TODO: ask TA how to handle batch size stuff here...
+    #     attention = tf.nn.softmax(tf.sum(tf.matmul(tf.matmul(question_rep, W), context_vectors)))
+    #     return attention
 
-    def concat_most_aligned(self, question_states, cur_ctx):
-        #Does part 4 in original handout
-        #question_states is a list of all of the hidden states for the question, cur_ctx is the current context word
-        #returns a concatenation of [cur_ctx, q*] where q* is the most aligned question word
-        U = tf.get_variable("U", shape=[cur_ctx.get_shape()[0], question_states[0].get_shape()[0]],
-                                 initializer=tf.contrib.layers.xavier_initializer())#maybe need to add reuse variable?
-        attention = [tf.nn.softmax(tf.matmul(tf.matmul(tf.transpose(cur_ctx), W), q)) for q in question_states]
-        most_aligned = (0.0, None)
+    # def concat_most_aligned(self, question_states, cur_ctx):
+    #     #Does part 4 in original handout
+    #     #question_states is a list of all of the hidden states for the question, cur_ctx is the current context word
+    #     #returns a concatenation of [cur_ctx, q*] where q* is the most aligned question word
+    #     U = tf.get_variable("U", shape=[cur_ctx.get_shape()[0], question_states[0].get_shape()[0]],
+    #                              initializer=tf.contrib.layers.xavier_initializer())#maybe need to add reuse variable?
+    #     attention = [tf.nn.softmax(tf.matmul(tf.matmul(tf.transpose(cur_ctx), W), q)) for q in question_states]
+    #     most_aligned = (0.0, None)
 
-        # TODO: change this to completely use tensorflow functions (like argmax)
-        for i in range(len(attention)):
-            if attention[i] > most_aligned:
-                most_aligned = (attention[i], question_states[i])
-        return tf.concat([cur_ctx,most_aligned[0]], 1)
+    #     # TODO: change this to completely use tensorflow functions (like argmax)
+    #     for i in range(len(attention)):
+    #         if attention[i] > most_aligned:
+    #             most_aligned = (attention[i], question_states[i])
+    #     return tf.concat([cur_ctx,most_aligned[0]], 1)
 
 
     def setup_system(self):
@@ -202,8 +209,8 @@ class QASystem(object):
         :return:
         """
         with vs.variable_scope("loss"):
-            self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs, self.answer_span_placeholder[:, 0])) + 
-                   tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs, self.answer_span_placeholder[:, 1]))
+            self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs, self.answer_span_placeholder[:, 0])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs, self.answer_span_placeholder[:, 1]))
             #pass
 
     def setup_embeddings(self):
@@ -212,13 +219,13 @@ class QASystem(object):
         :return:
         """
         with vs.variable_scope("embeddings"):
-            embedding = tf.Variable(self.pretrained_embeddings,name='embedding') #only learn one common embedding
+            embeddings = tf.Variable(self.pretrained_embeddings, name='embedding', dtype=tf.float32) #only learn one common embedding
 
-            question_embeddings = tf.nn.embedding_lookup(embedding, self.question_placeholder)
-            self.question_embeddings = tf.reshape(embeddings, [-1, self.max_q_len, self.embed_size])
+            question_embeddings = tf.nn.embedding_lookup(embeddings, self.question_placeholder)
+            self.question_embeddings = tf.reshape(question_embeddings, [-1, self.max_q_len, self.embed_size])
 
-            context_embeddings = tf.nn.embedding_lookup(embedding, self.context_placeholder)
-            self.context_embeddings = tf.reshape(embeddings, [-1, self.max_ctx_len, self.embed_size])
+            context_embeddings = tf.nn.embedding_lookup(embeddings, self.context_placeholder)
+            self.context_embeddings = tf.reshape(context_embeddings, [-1, self.max_ctx_len, self.embed_size])
 
 
     def optimize(self, session, train_x, train_y):
@@ -333,7 +340,7 @@ class QASystem(object):
         You should also implement learning rate annealing (look into tf.train.exponential_decay)
         Considering the long time to train, you should save your model per epoch.
 
-        More ambitious appoarch can include implement early stopping, or reload
+        More ambitious approach can include implement early stopping, or reload
         previous models if they have higher performance than the current one
 
         As suggested in the document, you should evaluate your training progress by
@@ -354,6 +361,8 @@ class QASystem(object):
         # you will also want to save your model parameters in train_dir
         # so that you can use your trained model to make predictions, or
         # even continue training
+
+        raise NotImplementedError
 
         tic = time.time()
         params = tf.trainable_variables()
