@@ -50,6 +50,7 @@ class Encoder(object):
 
         # note: inputs need to be zero-padded to max_time length
         # note: masks must contain actual length of every input in the batch
+
         outputs, output_states = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, inputs,
                                                                    sequence_length=masks, 
                                                                    initial_state_fw=encoder_state_input, 
@@ -124,6 +125,9 @@ class QASystem(object):
             self.setup_loss()
 
         # ==== set up training/updating procedure ====
+
+        
+
         pass
 
     def pad(self, sequence):
