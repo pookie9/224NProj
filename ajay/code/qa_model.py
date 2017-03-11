@@ -201,6 +201,11 @@ class QASystem(object):
         # decoder takes encoded representation to probability dists over start / end index
         self.start_probs, self.end_probs = self.decoder.decode(final_ctx_state)
 
+        # TODO: put predictions here?
+
+
+
+
         # TODO: is this correct for the baseline?
         # question_states, question_rep = self.question_encoder.encode(self.question_placeholder, self.mask_q_placeholder, None)
         # ctx_states, ctx_rep = self.context_encoder.encode(self.context_placeholder, self.mask_ctx_placeholder, None)
@@ -270,7 +275,16 @@ class QASystem(object):
         # fill in this feed_dictionary like:
         # input_feed['valid_x'] = valid_x
 
-        output_feed = []
+        input_feed[self.context_placeholder] = valid_x[0]
+        input_feed[self.question_placeholder] = valid_x[1]
+        input_feed[self.mask_ctx_placeholder] = valid_x[2]
+        input_feed[self.mask_q_placeholder] = valid_x[3]
+        input_feed[self.dropout_placeholder] = self.flags.dropout
+        input_feed[self.answer_span_placeholder] = valid_y
+
+        # TODO: compute cost for validation set, tune hyperparameters
+
+        output_feed = [self.loss]
 
         outputs = session.run(output_feed, input_feed)
 
@@ -287,7 +301,13 @@ class QASystem(object):
         # fill in this feed_dictionary like:
         # input_feed['test_x'] = test_x
 
-        output_feed = []
+        input_feed[self.context_placeholder] = test_x[0]
+        input_feed[self.question_placeholder] = test_x[1]
+        input_feed[self.mask_ctx_placeholder] = test_x[2]
+        input_feed[self.mask_q_placeholder] = test_x[3]
+        input_feed[self.dropout_placeholder] = self.flags.dropout
+
+        output_feed = [self.start_probs, self.end_probs]
 
         outputs = session.run(output_feed, input_feed)
 
@@ -317,7 +337,7 @@ class QASystem(object):
         valid_cost = 0
 
         for valid_x, valid_y in valid_dataset:
-          valid_cost = self.test(sess, valid_x, valid_y)
+          valid_cost += self.test(sess, valid_x, valid_y)
 
 
         return valid_cost
@@ -337,6 +357,14 @@ class QASystem(object):
         :param log: whether we print to std out stream
         :return:
         """
+
+        # iterate over dataset, calling answer method
+
+        # TODO: do we have to loop here over batches?
+        # TODO: be explicit about structure of dataset input for all of these functions.
+
+        a_s, a_e = self.answer(session, dataset[:4]) 
+
 
         f1 = 0.
         em = 0.
@@ -398,5 +426,4 @@ class QASystem(object):
         #       train on each minibatch
 
         # TODO: put a Progbar here from utils (copy over from PS 3)
-
 
