@@ -66,7 +66,8 @@ def initialize_data(data_path):
         dataset = []
         with tf.gfile.GFile(data_path, mode="rb") as f:
             dataset.extend(f.readlines())
-        dataset = [line.strip('\n') for line in dataset]
+        dataset = [line.strip('\n').split() for line in dataset]
+        dataset = [[int(num) for num in line] for line in dataset]
         return dataset
     else:
         raise ValueError("Vocabulary file %s not found.", data_path)

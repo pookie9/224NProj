@@ -134,20 +134,25 @@ class QASystem(object):
             self.setup_loss()
 
         # ==== set up training/updating procedure ====
-
-        pass
+        self.global_step = tf.Variable(0, trainable=False)
+        self.starter_learning_rate = self.flags.learning_rate
+        self.learning_rate = tf.train.exponential_decay(self.starter_learning_rate, self.global_step,
+                                           100000, 0.96, staircase=True)
+        self.optimizer = get_optimizer("adam")
+        self.train_op = self.optimizer(self.learning_rate).minimize(self.loss)
 
     def pad(self, sequence):
         # assumes sequence is a list of lists of word, pads to the longest "sentence"
         # returns (padded_sequence, mask)
         from qa_data import PAD_ID
         max_length = max(map(len, sequence))
+        print('max_length : {}'.format(max_length))
         padded_sequence = []
         mask = []
         for sentence in sequence:
             mask.append(len(sentence))
-            sentence.extend([PAD_ID] * (max_length-len(sequence)))
-            padded_sentence.append(sentence)
+            sentence.extend([PAD_ID] * (max_length - len(sentence)))
+            padded_sequence.append(sentence)
         return (padded_sequence, mask)
 
     # def setup_attention_vector(self, context_vectors, question_rep):
@@ -239,7 +244,14 @@ class QASystem(object):
         # fill in this feed_dictionary like:
         # input_feed['train_x'] = train_x
 
-        output_feed = []
+        input_feed[self.context_placeholder] = train_x[0]
+        input_feed[self.question_placeholder] = train_x[1]
+        input_feed[self.mask_ctx_placeholder] = train_x[2]
+        input_feed[self.mask_q_placeholder] = train_x[3]
+        input_feed[self.dropout_placeholder] = self.flags.dropout
+        input_feed[self.answer_span_placeholder] = train_y
+
+        output_feed = [self.train_op]
 
         outputs = session.run(output_feed, input_feed)
 
@@ -362,7 +374,7 @@ class QASystem(object):
         # so that you can use your trained model to make predictions, or
         # even continue training
 
-        raise NotImplementedError
+        #raise NotImplementedError
 
         tic = time.time()
         params = tf.trainable_variables()
@@ -375,3 +387,14 @@ class QASystem(object):
         for i in range(1,len(dataset[0])):
             assert len(dataset[0][i]) == len(dataset[0][i - 1]), "Incorrectly padded context"
             assert len(dataset[1][i]) == len(dataset[1][i - 1]), "Incorrectly padded question"
+
+        print("Training data padding verification completed.")
+        train_x = dataset[:2].extend(mask)
+        train_y = dataset[2]
+
+        # TODO: split dataset into minibatches, feed into optimize function to 
+        #       train on each minibatch
+
+        # TODO: put a Progbar here from utils (copy over from PS 3)
+
+
