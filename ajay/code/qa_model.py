@@ -10,11 +10,9 @@ from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
 
-import util
+from util import Progbar, minibatches
 
 from evaluate import exact_match_score, f1_score
-
-#from train import FLAGS
 
 logging.basicConfig(level=logging.INFO)
 
@@ -242,7 +240,7 @@ class QASystem(object):
             self.context_embeddings = tf.reshape(context_embeddings, [-1, self.max_ctx_len, self.embed_size])
 
 
-    def optimize(self, session, train_x, train_y):
+    def optimize(self, session, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch):
         """
         Takes in actual data to optimize your model
         This method is equivalent to a step() function
@@ -253,18 +251,18 @@ class QASystem(object):
         # fill in this feed_dictionary like:
         # input_feed['train_x'] = train_x
 
-        input_feed[self.context_placeholder] = train_x[0]
-        input_feed[self.question_placeholder] = train_x[1]
-        input_feed[self.mask_ctx_placeholder] = train_x[2]
-        input_feed[self.mask_q_placeholder] = train_x[3]
+        input_feed[self.context_placeholder] = context_batch
+        input_feed[self.question_placeholder] = question_batch
+        input_feed[self.mask_ctx_placeholder] = mask_ctx_batch
+        input_feed[self.mask_q_placeholder] = mask_q_batch
         input_feed[self.dropout_placeholder] = self.flags.dropout
-        input_feed[self.answer_span_placeholder] = train_y
+        input_feed[self.answer_span_placeholder] = answer_span_batch
 
-        output_feed = [self.train_op]
+        output_feed = [self.train_op, self.loss]
 
-        outputs = session.run(output_feed, input_feed)
+        _, loss = session.run(output_feed, input_feed)
 
-        return outputs
+        return loss
 
     def test(self, session, valid_x, valid_y):
         """
@@ -377,13 +375,13 @@ class QASystem(object):
         return f1, em
 
 
-
-    def run_epoch(self, sess, train_examples, dev_set, train_examples_raw, dev_set_raw):
-        prog = Progbar(target=1 + int(len(train_examples) / self.config.batch_size))
-        for i, batch in enumerate(minibatches(train_examples, self.config.batch_size)):
-            loss = self.train_on_batch(sess, *batch)
+    ### Imported from NERModel
+    def run_epoch(self, sess, train_examples, dev_set):
+        prog = Progbar(target=1 + int(len(train_examples) / self.flags.batch_size))
+        for i, batch in enumerate(minibatches(train_examples, self.flags.batch_size)):
+            loss = self.optimize(sess, *batch)
             prog.update(i + 1, [("train loss", loss)])
-            if self.report: self.report.log_train_loss(loss)
+            #if self.report: self.report.log_train_loss(loss)
         print("")
 
         #logger.info("Evaluating on training data")
@@ -392,14 +390,45 @@ class QASystem(object):
         #logger.debug("Token-level scores:\n" + token_cm.summary())
         #logger.info("Entity level P/R/F1: %.2f/%.2f/%.2f", *entity_scores)
 
-        logger.info("Evaluating on development data")
-        token_cm, entity_scores = self.evaluate(sess, dev_set, dev_set_raw)
-        logger.debug("Token-level confusion matrix:\n" + token_cm.as_table())
-        logger.debug("Token-level scores:\n" + token_cm.summary())
-        logger.info("Entity level P/R/F1: %.2f/%.2f/%.2f", *entity_scores)
+        # logger.info("Evaluating on development data")
+        # token_cm, entity_scores = self.evaluate(sess, dev_set, dev_set_raw)
+        # logger.debug("Token-level confusion matrix:\n" + token_cm.as_table())
+        # logger.debug("Token-level scores:\n" + token_cm.summary())
+        # logger.info("Entity level P/R/F1: %.2f/%.2f/%.2f", *entity_scores)
 
-        f1 = entity_scores[-1]
-        return f1
+        # f1 = entity_scores[-1]
+        # return f1
+
+    def evaluate(self, sess, examples, examples_raw):
+        """Evaluates model performance on @examples.
+
+        This function uses the model to predict labels for @examples and constructs a confusion matrix.
+
+        Args:
+            sess: the current TensorFlow session.
+            examples: A list of vectorized input/output pairs.
+            examples: A list of the original input/output sequence pairs.
+        Returns:
+            The F1 score for predicting tokens as named entities.
+        """
+        token_cm = ConfusionMatrix(labels=LBLS)
+
+        correct_preds, total_correct, total_preds = 0., 0., 0.
+        for _, labels, labels_  in self.output(sess, examples_raw, examples):
+            for l, l_ in zip(labels, labels_):
+                token_cm.update(l, l_)
+            gold = set(get_chunks(labels))
+            pred = set(get_chunks(labels_))
+            correct_preds += len(gold.intersection(pred))
+            total_preds += len(pred)
+            total_correct += len(gold)
+
+        p = correct_preds / total_preds if correct_preds > 0 else 0
+        r = correct_preds / total_correct if correct_preds > 0 else 0
+        f1 = 2 * p * r / (p + r) if correct_preds > 0 else 0
+        return token_cm, (p, r, f1)
+
+
     def consolidate_predictions(self, examples_raw, examples, preds):
         """Batch the predictions into groups of sentence length.
         """
@@ -413,15 +442,18 @@ class QASystem(object):
             assert len(labels_) == len(labels)
             ret.append([sentence, labels, labels_])
         return ret
+
     def predict_on_batch(self, sess, inputs_batch, mask_batch):
         feed = self.create_feed_dict(inputs_batch=inputs_batch, mask_batch=mask_batch)
         predictions = sess.run(tf.argmax(self.pred, axis=2), feed_dict=feed)
         return predictions
+
     def train_on_batch(self, sess, inputs_batch, labels_batch, mask_batch):
         feed = self.create_feed_dict(inputs_batch, labels_batch=labels_batch, mask_batch=mask_batch,
                                      dropout=Config.dropout)
         _, loss = sess.run([self.train_op, self.loss], feed_dict=feed)
         return loss
+
     def output(self, sess, inputs_raw, inputs=None):
         """
         Reports the output of the model on examples (uses helper to featurize each example).
@@ -438,6 +470,7 @@ class QASystem(object):
             preds += list(preds_)
             prog.update(i + 1, [])
         return self.consolidate_predictions(inputs_raw, inputs, preds)    
+
     def fit(self, sess, saver, train_examples_raw, dev_set_raw):
         best_score = 0.
 
@@ -460,7 +493,7 @@ class QASystem(object):
 
 
 
-    def train(self, session, dataset, train_dir):
+    def train(self, session, saver, dataset, train_dir):
         """
         Implement main training loop
 
@@ -507,11 +540,22 @@ class QASystem(object):
             assert len(dataset[1][i]) == len(dataset[1][i - 1]), "Incorrectly padded question"
 
         print("Training data padding verification completed.")
-        train_x = dataset[:2].extend(mask)
-        train_y = dataset[2]
+        train_data = dataset.extend(mask)
+        # train_data = dataset[:2].extend(mask)
+        # train_y = dataset[2]
 
         # TODO: split dataset into minibatches, feed into optimize function to 
         #       train on each minibatch
 
         # TODO: put a Progbar here from utils (copy over from PS 3)
+
+        for epoch in range(self.flags.epochs):
+            logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
+            self.run_epoch(sess=session, train_examples=train_data, dev_set=None)
+            logger.info("Saving model in %s", train_dir)
+            saver.save(session, train_dir)
+
+
+
+
 
