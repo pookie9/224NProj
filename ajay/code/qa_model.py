@@ -14,7 +14,7 @@ from util import Progbar, minibatches
 
 from evaluate import exact_match_score, f1_score
 
-from IPython import embed
+#from IPython import embed
 
 logging.basicConfig(level=logging.INFO)
 
@@ -531,7 +531,7 @@ class QASystem(object):
         for epoch in range(self.flags.epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
             self.run_epoch(sess=session, train_examples=dataset, dev_set=None)
-            logger.info("Saving model in %s", train_dir)
+            logging.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
 
 
