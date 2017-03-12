@@ -14,6 +14,8 @@ from util import Progbar, minibatches
 
 from evaluate import exact_match_score, f1_score
 
+from IPython import embed
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -275,10 +277,10 @@ class QASystem(object):
         # fill in this feed_dictionary like:
         # input_feed['valid_x'] = valid_x
 
-        input_feed[self.context_placeholder] = valid_x[0]
-        input_feed[self.question_placeholder] = valid_x[1]
-        input_feed[self.mask_ctx_placeholder] = valid_x[2]
-        input_feed[self.mask_q_placeholder] = valid_x[3]
+        input_feed[self.context_placeholder] = valid_x[:][0]
+        input_feed[self.question_placeholder] = valid_x[:][1]
+        input_feed[self.mask_ctx_placeholder] = valid_x[:][2]
+        input_feed[self.mask_q_placeholder] = valid_x[:][3]
         input_feed[self.dropout_placeholder] = self.flags.dropout
         input_feed[self.answer_span_placeholder] = valid_y
 
@@ -301,10 +303,10 @@ class QASystem(object):
         # fill in this feed_dictionary like:
         # input_feed['test_x'] = test_x
 
-        input_feed[self.context_placeholder] = test_x[0]
-        input_feed[self.question_placeholder] = test_x[1]
-        input_feed[self.mask_ctx_placeholder] = test_x[2]
-        input_feed[self.mask_q_placeholder] = test_x[3]
+        input_feed[self.context_placeholder] = test_x[:][0]
+        input_feed[self.question_placeholder] = test_x[:][1]
+        input_feed[self.mask_ctx_placeholder] = test_x[:][2]
+        input_feed[self.mask_q_placeholder] = test_x[:][3]
         input_feed[self.dropout_placeholder] = self.flags.dropout
 
         output_feed = [self.start_probs, self.end_probs]
@@ -448,12 +450,6 @@ class QASystem(object):
         predictions = sess.run(tf.argmax(self.pred, axis=2), feed_dict=feed)
         return predictions
 
-    def train_on_batch(self, sess, inputs_batch, labels_batch, mask_batch):
-        feed = self.create_feed_dict(inputs_batch, labels_batch=labels_batch, mask_batch=mask_batch,
-                                     dropout=Config.dropout)
-        _, loss = sess.run([self.train_op, self.loss], feed_dict=feed)
-        return loss
-
     def output(self, sess, inputs_raw, inputs=None):
         """
         Reports the output of the model on examples (uses helper to featurize each example).
@@ -471,25 +467,6 @@ class QASystem(object):
             prog.update(i + 1, [])
         return self.consolidate_predictions(inputs_raw, inputs, preds)    
 
-    def fit(self, sess, saver, train_examples_raw, dev_set_raw):
-        best_score = 0.
-
-        train_examples = self.preprocess_sequence_data(train_examples_raw)
-        dev_set = self.preprocess_sequence_data(dev_set_raw)
-
-        for epoch in range(self.config.n_epochs):
-            logger.info("Epoch %d out of %d", epoch + 1, self.config.n_epochs)
-            score = self.run_epoch(sess, train_examples, dev_set, train_examples_raw, dev_set_raw)
-            if score > best_score:
-                best_score = score
-                if saver:
-                    logger.info("New best score! Saving model in %s", self.config.model_output)
-                    saver.save(sess, self.config.model_output)
-            print("")
-            if self.report:
-                self.report.log_epoch()
-                self.report.save()
-        return best_score
 
 
 
@@ -540,7 +517,9 @@ class QASystem(object):
             assert len(dataset[1][i]) == len(dataset[1][i - 1]), "Incorrectly padded question"
 
         print("Training data padding verification completed.")
-        train_data = dataset.extend(mask)
+        
+        dataset.extend(mask)
+        dataset = np.array(dataset).T
         # train_data = dataset[:2].extend(mask)
         # train_y = dataset[2]
 
@@ -551,7 +530,7 @@ class QASystem(object):
 
         for epoch in range(self.flags.epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
-            self.run_epoch(sess=session, train_examples=train_data, dev_set=None)
+            self.run_epoch(sess=session, train_examples=dataset, dev_set=None)
             logger.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
 
