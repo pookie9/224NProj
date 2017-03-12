@@ -10,6 +10,8 @@ from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
 
+import util
+
 from evaluate import exact_match_score, f1_score
 
 #from train import FLAGS
@@ -148,7 +150,7 @@ class QASystem(object):
         # returns (padded_sequence, mask)
         from qa_data import PAD_ID
         max_length = max(map(len, sequence))
-        print('max_length : {}'.format(max_length))
+        #print('max_length : {}'.format(max_length))
         padded_sequence = []
         mask = []
         for sentence in sequence:
@@ -374,6 +376,90 @@ class QASystem(object):
 
         return f1, em
 
+
+
+    def run_epoch(self, sess, train_examples, dev_set, train_examples_raw, dev_set_raw):
+        prog = Progbar(target=1 + int(len(train_examples) / self.config.batch_size))
+        for i, batch in enumerate(minibatches(train_examples, self.config.batch_size)):
+            loss = self.train_on_batch(sess, *batch)
+            prog.update(i + 1, [("train loss", loss)])
+            if self.report: self.report.log_train_loss(loss)
+        print("")
+
+        #logger.info("Evaluating on training data")
+        #token_cm, entity_scores = self.evaluate(sess, train_examples, train_examples_raw)
+        #logger.debug("Token-level confusion matrix:\n" + token_cm.as_table())
+        #logger.debug("Token-level scores:\n" + token_cm.summary())
+        #logger.info("Entity level P/R/F1: %.2f/%.2f/%.2f", *entity_scores)
+
+        logger.info("Evaluating on development data")
+        token_cm, entity_scores = self.evaluate(sess, dev_set, dev_set_raw)
+        logger.debug("Token-level confusion matrix:\n" + token_cm.as_table())
+        logger.debug("Token-level scores:\n" + token_cm.summary())
+        logger.info("Entity level P/R/F1: %.2f/%.2f/%.2f", *entity_scores)
+
+        f1 = entity_scores[-1]
+        return f1
+    def consolidate_predictions(self, examples_raw, examples, preds):
+        """Batch the predictions into groups of sentence length.
+        """
+        assert len(examples_raw) == len(examples)
+        assert len(examples_raw) == len(preds)
+
+        ret = []
+        for i, (sentence, labels) in enumerate(examples_raw):
+            _, _, mask = examples[i]
+            labels_ = [l for l, m in zip(preds[i], mask) if m] # only select elements of mask.
+            assert len(labels_) == len(labels)
+            ret.append([sentence, labels, labels_])
+        return ret
+    def predict_on_batch(self, sess, inputs_batch, mask_batch):
+        feed = self.create_feed_dict(inputs_batch=inputs_batch, mask_batch=mask_batch)
+        predictions = sess.run(tf.argmax(self.pred, axis=2), feed_dict=feed)
+        return predictions
+    def train_on_batch(self, sess, inputs_batch, labels_batch, mask_batch):
+        feed = self.create_feed_dict(inputs_batch, labels_batch=labels_batch, mask_batch=mask_batch,
+                                     dropout=Config.dropout)
+        _, loss = sess.run([self.train_op, self.loss], feed_dict=feed)
+        return loss
+    def output(self, sess, inputs_raw, inputs=None):
+        """
+        Reports the output of the model on examples (uses helper to featurize each example).
+        """
+        if inputs is None:
+            inputs = self.preprocess_sequence_data(self.helper.vectorize(inputs_raw))
+
+        preds = []
+        prog = Progbar(target=1 + int(len(inputs) / self.config.batch_size))
+        for i, batch in enumerate(minibatches(inputs, self.config.batch_size, shuffle=False)):
+            # Ignore predict
+            batch = batch[:1] + batch[2:]
+            preds_ = self.predict_on_batch(sess, *batch)
+            preds += list(preds_)
+            prog.update(i + 1, [])
+        return self.consolidate_predictions(inputs_raw, inputs, preds)    
+    def fit(self, sess, saver, train_examples_raw, dev_set_raw):
+        best_score = 0.
+
+        train_examples = self.preprocess_sequence_data(train_examples_raw)
+        dev_set = self.preprocess_sequence_data(dev_set_raw)
+
+        for epoch in range(self.config.n_epochs):
+            logger.info("Epoch %d out of %d", epoch + 1, self.config.n_epochs)
+            score = self.run_epoch(sess, train_examples, dev_set, train_examples_raw, dev_set_raw)
+            if score > best_score:
+                best_score = score
+                if saver:
+                    logger.info("New best score! Saving model in %s", self.config.model_output)
+                    saver.save(sess, self.config.model_output)
+            print("")
+            if self.report:
+                self.report.log_epoch()
+                self.report.save()
+        return best_score
+
+
+
     def train(self, session, dataset, train_dir):
         """
         Implement main training loop
@@ -397,6 +483,8 @@ class QASystem(object):
         :param train_dir: path to the directory where you should save the model checkpoint
         :return:
         """
+
+
 
         # some free code to print out number of parameters in your model
         # it's always good to check!
