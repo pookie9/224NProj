@@ -409,8 +409,6 @@ class QASystem(object):
 
         sampled = dataset[np.random.choice(dataset.shape[0], sample)]
 
-        embed()
-
         a_s, a_e = self.answer(session, sampled)
 
 

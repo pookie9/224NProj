@@ -125,6 +125,7 @@ def main(_):
     val_answer_spans = initialize_data(val_answer_span_path)
 
     train_dataset = [context_ids,question_ids,answer_spans]
+
     val_dataset = [val_context_ids,val_question_ids,val_answer_spans]
     dataset = (train_dataset,val_dataset)
 
