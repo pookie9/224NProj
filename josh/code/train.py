@@ -5,8 +5,6 @@ from __future__ import print_function
 import os
 import json
 
-import sys
-
 import tensorflow as tf
 
 from qa_model import Encoder, QASystem, Decoder
@@ -34,6 +32,7 @@ tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per pri
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
+tf.app.flags.DEFINE_string("evaluate", 100 , "number of samples in evaluate_answer")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -62,14 +61,15 @@ def initialize_vocab(vocab_path):
     else:
         raise ValueError("Vocabulary file %s not found.", vocab_path)
 
-def initialize_data(data_path):
+def initialize_data(data_path,keep_as_string=False):
     if tf.gfile.Exists(data_path):
         print ("LOADING:",data_path)
         dataset = []
         with tf.gfile.GFile(data_path, mode="rb") as f:
             dataset.extend(f.readlines())
         dataset = [line.strip('\n').split() for line in dataset]
-        dataset = [[int(num) for num in line] for line in dataset]
+        if not keep_as_string:
+            dataset = [[int(num) for num in line] for line in dataset]
         return dataset
     else:
         raise ValueError("Vocabulary file %s not found.", data_path)
@@ -114,28 +114,29 @@ def main(_):
     context_ids_path = pjoin(FLAGS.data_dir, "train.ids.context")
     question_ids_path = pjoin(FLAGS.data_dir, "train.ids.question")
     answer_span_path = pjoin(FLAGS.data_dir, "train.span")
+    val_context_ids_path = pjoin(FLAGS.data_dir, "val.ids.context")
+    val_question_ids_path = pjoin(FLAGS.data_dir, "val.ids.question")
+    val_answer_span_path = pjoin(FLAGS.data_dir, "val.span")
 
+    context_path = pjoin(FLAGS.data_dir, "train.context")
+    val_context_path = pjoin(FLAGS.data_dir, "val.context")
 
     context_ids = initialize_data(context_ids_path)
     question_ids = initialize_data(question_ids_path)
     answer_spans = initialize_data(answer_span_path)
-
-
-    context_ids_val = initialize_data(pjoin(FLAGS.data_dir, "val.ids.context"))
-    question_ids_val = initialize_data(pjoin(FLAGS.data_dir, "val.ids.question"))
-    answer_spans_val = initialize_data(pjoin(FLAGS.data_dir, "val.span"))
-    val_dataset=[context_ids_val,question_ids_val,answer_spans_val]
+    context = initialize_data(context_path,keep_as_string=True)
+    val_context_ids = initialize_data(val_context_ids_path)
+    val_question_ids = initialize_data(val_question_ids_path)
+    val_answer_spans = initialize_data(val_answer_span_path)
+    val_context = initialize_data(val_context_path,keep_as_string=True)
     
-    if "--debug" in sys.argv:
-        print ("DOING DEBUG")
-        context_ids=context_ids[:100]
-        question_ids=question_ids[:100]
-        answer_spans=answer_spans[:100]
     
-    dataset = [context_ids, question_ids, answer_spans]
+    train_dataset = [context_ids,question_ids,answer_spans,context]
+    val_dataset = [val_context_ids,val_question_ids,val_answer_spans,val_context]
+    dataset = (train_dataset,val_dataset)
 
-    max_ctx_len = max(map(len, context_ids))
-    max_q_len = max(map(len, question_ids))
+    max_ctx_len = max(max(map(len, context_ids)), max(map(len, val_context_ids)))
+    max_q_len = max(max(map(len, question_ids)), max(map(len, val_question_ids)))
     
     embeddings = initialize_embeddings(embed_path)
     
@@ -143,12 +144,9 @@ def main(_):
     assert embeddings.shape[1] == FLAGS.embedding_size, "Mismatch between embedding shape and FLAGS"
     assert len(context_ids) == len(question_ids) == len(answer_spans), "Mismatch between context, questions, and answer lengths"
 
-    
-    
     question_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, name="question_encoder")
     context_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, name="context_encoder")
     decoder = Decoder(output_size=FLAGS.output_size)
-    
 
     qa = QASystem(encoder=(question_encoder,context_encoder), 
                   decoder=decoder, 
@@ -173,9 +171,10 @@ def main(_):
         save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
         saver = tf.train.Saver()
 
-        qa.train(sess, saver, dataset, val_dataset,save_train_dir)
+        qa.train(sess, saver, dataset, save_train_dir)
 
-        qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
+        #qa.evaluate_answer(sess, val_dataset, vocab, FLAGS.evaluate, log=True)
+        qa.evaluate_answer(sess, val_dataset, vocab, len(val_dataset[0]), log=True)
 
 if __name__ == "__main__":
     tf.app.run()
