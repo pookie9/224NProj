@@ -328,18 +328,21 @@ class QASystem(object):
 
         # fill in this feed_dictionary like:
         # input_feed['test_x'] = test_x
+        
+        #mask_ctx_batch=np.reshape(mask_ctx_batch,(context_batch.shape[0]))
+        #mask_q_batch=np.reshape(mask_q_batch,(context_batch.shape[0]))
+        
 
-        input_feed[self.context_placeholder] = context_batch
-        input_feed[self.question_placeholder] = question_batch
-        input_feed[self.mask_ctx_placeholder] = mask_ctx_batch
-        input_feed[self.mask_q_placeholder] = mask_q_batch
+        input_feed[self.context_placeholder] = np.array(map(np.array,context_batch))
+        input_feed[self.question_placeholder] = np.array(map(np.array,question_batch))
+        input_feed[self.mask_ctx_placeholder] = np.array(map(np.array,mask_ctx_batch))
+        input_feed[self.mask_q_placeholder] = np.array(mask_q_batch)
         input_feed[self.dropout_placeholder] = self.flags.dropout
 
 
         output_feed = [self.start_probs, self.end_probs]
 
-        embed()
-
+        
         outputs = session.run(output_feed, input_feed)
 
         return outputs
@@ -410,10 +413,11 @@ class QASystem(object):
         sampled = dataset[np.random.choice(dataset.shape[0], sample)]
 
         a_s, a_e = self.answer(session, sampled)
-
-
-        f1 = f1_score([a_s,a_e],dataset[2])
-        em = exact_match_score([a_s,a_e],dataset[2])
+        f1=[]
+        em=[]
+        for i in range(len(dataset[0])):            
+            f1.append(f1_score(dataset[-1][i][a_s,a_e],dataset[-1][i][dataset[2][i])])
+            em.append(exact_match_score(dataset[-1][i][a_s,a_e],dataset[-1][i][dataset[2][i])]))
 
         if log:
             logging.info("F1: {}, EM: {}, for {} samples".format(f1, em, sample))
