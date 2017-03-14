@@ -29,6 +29,59 @@ def get_optimizer(opt):
     return optfn
 
 
+class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
+    """
+    Arguments:
+        -num_units: hidden state dimensions
+        -encoder_output: hidden states to compute attention over
+        -scope: lol who knows
+    """
+    def __init__(self, num_units, encoder_output, scope=None):
+        self.attn_states = encoder_output
+        super(GRUAttnCell, self).__init__(num_units)
+
+    def __call__(self, inputs, state, scope=None):
+        gru_out, gru_state = super(GRUAttnCell, self).__call__(inputs, state, scope)
+        with tf.variable_scope(scope or type(self).__name__):
+            # compute scores using hs.T * W * ht
+            with tf.variable_scope("Attn"):
+                # ht is shape (batch_size, hid_dim)
+                W_score = tf.get_variable("W_score", shape=(self._num_units, self._num_units),
+                                          initializer=tf.contrib.layers.xavier_initializer())
+                b_score = tf.get_variable("b_score", shape=(self._num_units))
+                ht = tf.matmul(gru_out, W_score) + b_score
+
+                #ht = tf.nn.rnn_cell._linear(gru_out, self._num_units, True, 1.0)
+
+                # ht is shape (batch_size, 1, hid_dim)
+                ht = tf.expand_dims(ht, axis=1)
+
+            # scores is shape (batch_size, N, 1)
+            scores = tf.reduce_sum(self.attn_states * ht, reduction_indices=2, keep_dims=True)
+
+            # compute context vector using linear combination of attention states with
+            # weights given by attention vector.
+            # context is shape (batch_size, hid_dim)
+            context = tf.reduce_sum(self.attn_states * scores, reduction_indices=1)
+
+            with tf.variable_scope("AttnConcat"):
+                W_c = tf.get_variable("W_c", shape=(2 * self._num_units, self._num_units),
+                                          initializer=tf.contrib.layers.xavier_initializer())
+                b_c = tf.get_variable("b_c", shape=(self._num_units))
+
+                # print(context.get_shape())
+                # print(gru_out.get_shape())
+
+                concat_vec = tf.concat(1, [context, gru_out])
+
+                out = tf.nn.softsign(tf.matmul(concat_vec, W_c) + b_c)
+
+            return (out, out)
+
+class LSTMAttnCell(tf.nn.rnn_cell.BasicLSTMCell):
+    def __init__(self, num_units, encoder_output, scope=None):
+        pass
+
 class Encoder(object):
     """
     Arguments:
@@ -40,7 +93,7 @@ class Encoder(object):
         self.vocab_dim = vocab_dim
         self.name = name
 
-    def encode(self, inputs, masks, encoder_state_input=None):
+    def encode(self, inputs, masks, encoder_state_input=None, attention_inputs=None, model_type="gru"):
         """
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
@@ -51,12 +104,32 @@ class Encoder(object):
                       through masked steps
         :param encoder_state_input: (Optional) pass this as initial hidden state
                                     to tf.nn.dynamic_rnn to build conditional representations
+        :param attention_inputs: (Optional) pass this to compute attention and context 
+                                    over these encodings
         :return: an encoded representation of your input.
                  It can be context-level representation, word-level representation,
                  or both.
         """
         with tf.variable_scope(self.name):
-            cell = tf.nn.rnn_cell.BasicLSTMCell(self.size)
+
+            # Define the correct cell type.
+            if attention_inputs is None:
+                if model_type == "gru":
+                    cell = tf.nn.rnn_cell.GRUCell(self.size)
+                elif model_type == "lstm":
+                    cell = tf.nn.rnn_cell.BasicLSTMCell(self.size)
+                else:
+                    raise Exception('Must specify model type.')
+            else:
+                # use an attention cell - each cell uses attention to compute context
+                # over the @attention_inputs
+                if model_type == "gru":
+                    cell = GRUAttnCell(self.size, attention_inputs)
+                elif model_type == "lstm":
+                    cell = LSTMAttnCell(self.size, attention_inputs)
+                else:
+                    raise Exception('Must specify model type.')                
+
             outputs, final_state = tf.nn.dynamic_rnn(cell, inputs, 
                                            sequence_length=masks, 
                                            dtype=tf.float32,
@@ -79,7 +152,7 @@ class Decoder(object):
     def __init__(self, output_size):
         self.output_size = output_size
 
-    def decode(self, knowledge_rep):
+    def decode(self, knowledge_rep, model_type="gru"):
         """
         takes in a knowledge representation
         and output a probability estimation over
@@ -91,7 +164,15 @@ class Decoder(object):
                               decided by how you choose to implement the encoder
         :return:
         """
-        knowledge_rep = knowledge_rep[-1]
+
+        if model_type == "gru":
+            pass
+        elif model_type == "lstm":
+            # take 2nd part of state params, since that corresponds to hidden state h
+            knowledge_rep = knowledge_rep[-1]
+        else:
+            raise Exception('Must specify model type.')
+
         input_size = knowledge_rep.get_shape()[-1]
         W_start = tf.get_variable("W_start", shape=(input_size, self.output_size),
                 initializer=tf.contrib.layers.xavier_initializer())
@@ -197,8 +278,14 @@ class QASystem(object):
         """
 
         # simple encoder stuff here
-        question_states, final_question_state = self.question_encoder.encode(self.question_embeddings, self.mask_q_placeholder, None)
-        ctx_states, final_ctx_state = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, final_question_state)
+        question_states, final_question_state = self.question_encoder.encode(self.question_embeddings, self.mask_q_placeholder, 
+                                                                             encoder_state_input=None, 
+                                                                             attention_inputs=None, 
+                                                                             model_type=self.flags.model_type)
+        ctx_states, final_ctx_state = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
+                                                                             encoder_state_input=None,#final_question_state, 
+                                                                             attention_inputs=question_states,
+                                                                             model_type=self.flags.model_type)
 
         # decoder takes encoded representation to probability dists over start / end index
         self.start_probs, self.end_probs = self.decoder.decode(final_ctx_state)
@@ -523,7 +610,13 @@ class QASystem(object):
         # train_data = dataset[:2].extend(mask)
         # train_y = dataset[2]
 
-        for epoch in range(self.flags.epochs):
+        num_epochs = self.flags.epochs
+
+        if self.flags.debug:
+            dataset = dataset[:self.flags.batch_size]
+            num_epochs = 100
+
+        for epoch in range(num_epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
             self.run_epoch(sess=session, train_examples=dataset, dev_set=None)
             logging.info("Saving model in %s", train_dir)

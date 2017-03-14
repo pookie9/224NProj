@@ -33,6 +33,11 @@ tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicate
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 
+# added
+tf.app.flags.DEFINE_string("model_type", "gru", "specify either gru or lstm cell type for encoding")
+tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
+
+
 FLAGS = tf.app.flags.FLAGS
 
 
@@ -126,6 +131,8 @@ def main(_):
     assert len(vocab) == embeddings.shape[0], "Mismatch between embedding shape and vocab length"
     assert embeddings.shape[1] == FLAGS.embedding_size, "Mismatch between embedding shape and FLAGS"
     assert len(context_ids) == len(question_ids) == len(answer_spans), "Mismatch between context, questions, and answer lengths"
+
+    print("Using model type : {}".format(FLAGS.model_type))
 
     question_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, name="question_encoder")
     context_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, name="context_encoder")
