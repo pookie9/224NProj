@@ -416,8 +416,8 @@ class QASystem(object):
         f1=[]
         em=[]
         for i in range(len(dataset[0])):            
-            f1.append(f1_score(dataset[-1][i][a_s,a_e],dataset[-1][i][dataset[2][i])])
-            em.append(exact_match_score(dataset[-1][i][a_s,a_e],dataset[-1][i][dataset[2][i])]))
+            f1.append(f1_score(dataset[-1][i][a_s,a_e],dataset[-1][i][dataset[2][i]]))
+            em.append(exact_match_score(dataset[-1][i][a_s,a_e],dataset[-1][i][dataset[2][i]]))
 
         if log:
             logging.info("F1: {}, EM: {}, for {} samples".format(f1, em, sample))
