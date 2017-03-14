@@ -523,11 +523,6 @@ class QASystem(object):
         # train_data = dataset[:2].extend(mask)
         # train_y = dataset[2]
 
-        # TODO: split dataset into minibatches, feed into optimize function to 
-        #       train on each minibatch
-
-        # TODO: put a Progbar here from utils (copy over from PS 3)
-
         for epoch in range(self.flags.epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
             self.run_epoch(sess=session, train_examples=dataset, dev_set=None)
