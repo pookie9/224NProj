@@ -18,9 +18,9 @@ logging.basicConfig(level=logging.INFO)
 tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
-tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
+tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
-tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
+tf.app.flags.DEFINE_integer("state_size", 50, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("output_size", 750, "The output size of your model.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
@@ -32,11 +32,11 @@ tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per pri
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
-tf.app.flags.DEFINE_string("evaluate", 100 , "number of samples in evaluate_answer")
 
 # added
 tf.app.flags.DEFINE_string("model_type", "gru", "specify either gru or lstm cell type for encoding")
-tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
+tf.app.flags.DEFINE_integer("debug", 1, "whether to set debug or not")
+
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -128,18 +128,16 @@ def main(_):
     context_ids = initialize_data(context_ids_path)
     question_ids = initialize_data(question_ids_path)
     answer_spans = initialize_data(answer_span_path)
-    context = initialize_data(context_path,keep_as_string=True)
+    context = initialize_data(context_path, keep_as_string=True)
     val_context_ids = initialize_data(val_context_ids_path)
     val_question_ids = initialize_data(val_question_ids_path)
     val_answer_spans = initialize_data(val_answer_span_path)
-    val_context = initialize_data(val_context_path,keep_as_string=True)
-    
-    
+    val_context = initialize_data(val_context_path, keep_as_string=True)
+
     train_dataset = [context_ids,question_ids,answer_spans]
     val_dataset = [val_context_ids,val_question_ids,val_answer_spans]
     contexts = [context,val_context]
     dataset = (train_dataset,val_dataset)
-
 
     max_ctx_len = max(max(map(len, context_ids)), max(map(len, val_context_ids)))
     max_q_len = max(max(map(len, question_ids)), max(map(len, val_question_ids)))
@@ -149,6 +147,8 @@ def main(_):
     assert len(vocab) == embeddings.shape[0], "Mismatch between embedding shape and vocab length"
     assert embeddings.shape[1] == FLAGS.embedding_size, "Mismatch between embedding shape and FLAGS"
     assert len(context_ids) == len(question_ids) == len(answer_spans), "Mismatch between context, questions, and answer lengths"
+
+    print("Using model type : {}".format(FLAGS.model_type))
 
     question_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, name="question_encoder")
     context_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, name="context_encoder")
@@ -177,8 +177,9 @@ def main(_):
         save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
         saver = tf.train.Saver()
 
-        qa.train(sess,saver,dataset,contexts,save_train_dir)
-        #qa.evaluate_answer(sess, np.array(val_dataset).T, val_context, len(val_dataset[0]), log=True)
+        qa.train(sess, saver, dataset, contexts, save_train_dir)
+
+        #qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
 
 if __name__ == "__main__":
     tf.app.run()

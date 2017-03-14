@@ -107,7 +107,7 @@ class Encoder(object):
         self.vocab_dim = vocab_dim
         self.name = name
 
-    def encode(self, inputs, masks, encoder_state_input=(None,None), attention_inputs=None, model_type="gru",dropout=0.0):
+    def encode(self, inputs, masks, encoder_state_input=(None,None), attention_inputs=(None,None), model_type="gru",dropout=0.0):
         """
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
@@ -139,11 +139,11 @@ class Encoder(object):
                 # use an attention cell - each cell uses attention to compute context
                 # over the @attention_inputs
                 if model_type == "gru":
-                    fw_cell = GRUAttnCell(self.size, attention_inputs)
-                    bw_cell = GRUAttnCell(self.size, attention_inputs)
+                    fw_cell = GRUAttnCell(self.size, attention_inputs[0])
+                    bw_cell = GRUAttnCell(self.size, attention_inputs[1])
                 elif model_type == "lstm":
-                    fw_cell = LSTMAttnCell(self.size, attention_inputs)
-                    bw_cell = LSTMAttnCell(self.size, attention_inputs)
+                    fw_cell = LSTMAttnCell(self.size, attention_inputs[0])
+                    bw_cell = LSTMAttnCell(self.size, attention_inputs[1])
                 else:
                     raise Exception('Must specify model type.')                
             #cell=DropoutCell(cell,1.0-dropout)
@@ -151,11 +151,11 @@ class Encoder(object):
             outputs, final_state = tf.nn.bidirectional_dynamic_rnn(fw_cell,bw_cell,inputs,sequence_length=masks,dtype=tf.float32,initial_state_fw=encoder_state_input[0],initial_state_bw=encoder_state_input[1])
             if model_type=="gru":
                 concatted_final_state=tf.concat(1,final_state)
-                outputs=tf.concat(2,outputs)
+                concat_outputs=tf.concat(2,outputs)
             else:
                 print ("WRONG MODEL TYPE")
                 exit(1)
-        return outputs, concatted_final_state,final_state
+        return concat_outputs,concat_final_state,outputs,final_state
 
 
         # # TODO: see shape of output_states
@@ -277,14 +277,14 @@ class QASystem(object):
 
         # simple encoder stuff here
 
-        question_states, final_question_state,ctx_input = self.question_encoder.encode(self.question_embeddings, self.mask_q_placeholder, 
+        question_states, final_question_state,ctx_att_input,ctx_input = self.question_encoder.encode(self.question_embeddings, self.mask_q_placeholder, 
                                                                              encoder_state_input=(None,None), 
-                                                                             attention_inputs=None, 
+                                                                             attention_inputs=(None,None), 
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
 
-        ctx_states, final_ctx_state,_ = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
+        ctx_states, final_ctx_state,_,_ = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
                                                                              encoder_state_input=(None,None), #ctx_input
-                                                                             attention_inputs=None, #question_states
+                                                                             attention_inputs=ctx_att_input, #question_states
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
         # decoder takes encoded representation to probability dists over start / end index
         self.start_probs, self.end_probs = self.decoder.decode(final_ctx_state)
