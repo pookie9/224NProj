@@ -131,10 +131,14 @@ def main(_):
     val_context = initialize_data(val_context_path,keep_as_string=True)
     
     
-    train_dataset = [context_ids,question_ids,answer_spans,context]
-    val_dataset = [val_context_ids,val_question_ids,val_answer_spans,val_context]
+    train_dataset = [context_ids,question_ids,answer_spans]
+    val_dataset = [val_context_ids,val_question_ids,val_answer_spans]
+<<<<<<< HEAD
+    contexts = [context,val_context]
+=======
+>>>>>>> 1349603aae2c770dc2548b18935b2ee6588712b0
     dataset = (train_dataset,val_dataset)
-
+    contexts=[context,val_context]
     max_ctx_len = max(max(map(len, context_ids)), max(map(len, val_context_ids)))
     max_q_len = max(max(map(len, question_ids)), max(map(len, val_question_ids)))
     
@@ -171,7 +175,11 @@ def main(_):
         save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
         saver = tf.train.Saver()
 
-        qa.train(sess, saver, dataset, save_train_dir)
+<<<<<<< HEAD
+        qa.train(sess,saver,dataset,contexts,save_train_dir)
+=======
+        qa.train(sess, saver, dataset, save_train_dir,contexts)
+>>>>>>> 1349603aae2c770dc2548b18935b2ee6588712b0
 
         #qa.evaluate_answer(sess, val_dataset, vocab, FLAGS.evaluate, log=True)
         qa.evaluate_answer(sess, val_dataset, vocab, len(val_dataset[0]), log=True)
