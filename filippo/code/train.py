@@ -61,14 +61,15 @@ def initialize_vocab(vocab_path):
     else:
         raise ValueError("Vocabulary file %s not found.", vocab_path)
 
-def initialize_data(data_path):
+def initialize_data(data_path,keep_as_string=False):
     if tf.gfile.Exists(data_path):
         print ("LOADING:",data_path)
         dataset = []
         with tf.gfile.GFile(data_path, mode="rb") as f:
             dataset.extend(f.readlines())
         dataset = [line.strip('\n').split() for line in dataset]
-        dataset = [[int(num) for num in line] for line in dataset]
+        if not keep_as_string:
+            dataset = [[int(num) for num in line] for line in dataset]
         return dataset
     else:
         raise ValueError("Vocabulary file %s not found.", data_path)
@@ -117,16 +118,21 @@ def main(_):
     val_question_ids_path = pjoin(FLAGS.data_dir, "val.ids.question")
     val_answer_span_path = pjoin(FLAGS.data_dir, "val.span")
 
+    context_path = pjoin(FLAGS.data_dir, "train.context")
+    val_context_path = pjoin(FLAGS.data_dir, "val.context")
+
     context_ids = initialize_data(context_ids_path)
     question_ids = initialize_data(question_ids_path)
     answer_spans = initialize_data(answer_span_path)
+    context = initialize_data(context_path,keep_as_string=True)
     val_context_ids = initialize_data(val_context_ids_path)
     val_question_ids = initialize_data(val_question_ids_path)
     val_answer_spans = initialize_data(val_answer_span_path)
-
-    train_dataset = [context_ids,question_ids,answer_spans]
-
-    val_dataset = [val_context_ids,val_question_ids,val_answer_spans]
+    val_context = initialize_data(val_context_path,keep_as_string=True)
+    
+    
+    train_dataset = [context_ids,question_ids,answer_spans,context]
+    val_dataset = [val_context_ids,val_question_ids,val_answer_spans,val_context]
     dataset = (train_dataset,val_dataset)
 
     max_ctx_len = max(max(map(len, context_ids)), max(map(len, val_context_ids)))
