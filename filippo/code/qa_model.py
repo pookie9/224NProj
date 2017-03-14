@@ -14,7 +14,7 @@ from util import Progbar, minibatches
 
 from evaluate import exact_match_score, f1_score
 
-#from IPython import embed
+from IPython import embed
 
 logging.basicConfig(level=logging.INFO)
 
@@ -316,9 +316,9 @@ class QASystem(object):
 
         outputs = session.run(output_feed, input_feed)
 
-        return outputs
+        return outputs[0]
 
-    def decode(self, session, test_x):
+    def decode(self, session, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch):
         """
         Returns the probability distribution over different positions in the paragraph
         so that other methods like self.answer() will be able to work properly
@@ -329,26 +329,31 @@ class QASystem(object):
         # fill in this feed_dictionary like:
         # input_feed['test_x'] = test_x
 
-        input_feed[self.context_placeholder] = test_x[:][0]
-        input_feed[self.question_placeholder] = test_x[:][1]
-        input_feed[self.mask_ctx_placeholder] = test_x[:][2]
-        input_feed[self.mask_q_placeholder] = test_x[:][3]
+        input_feed[self.context_placeholder] = context_batch
+        input_feed[self.question_placeholder] = question_batch
+        input_feed[self.mask_ctx_placeholder] = mask_ctx_batch
+        input_feed[self.mask_q_placeholder] = mask_q_batch
         input_feed[self.dropout_placeholder] = self.flags.dropout
 
+
         output_feed = [self.start_probs, self.end_probs]
+
+        embed()
 
         outputs = session.run(output_feed, input_feed)
 
         return outputs
 
-    def answer(self, session, test_x):
+    def answer(self, session, data):
 
-        yp, yp2 = self.decode(session, test_x)
+    	data = np.array(data).T
+
+        yp, yp2 = self.decode(session, *data)
 
         a_s = np.argmax(yp, axis=1)
         a_e = np.argmax(yp2, axis=1)
 
-        return a_s, a_e
+        return (a_s, a_e)
 
     #def validate(self, sess, valid_dataset):
     def validate(self, sess, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch):
@@ -397,7 +402,16 @@ class QASystem(object):
         # TODO: do we have to loop here over batches?
         # TODO: be explicit about structure of dataset input for all of these functions.
 
-        a_s, a_e = self.answer(session, dataset[:4])
+
+        # idx = np.random.randint(100, size=2)
+        # sampled = dataset[idx]
+
+
+        sampled = dataset[np.random.choice(dataset.shape[0], sample)]
+
+        embed()
+
+        a_s, a_e = self.answer(session, sampled)
 
 
         f1 = f1_score([a_s,a_e],dataset[2])
@@ -441,74 +455,6 @@ class QASystem(object):
         # f1 = entity_scores[-1]
         # return f1
 
-    # def evaluate(self, sess, examples, examples_raw):
-    #     """Evaluates model performance on @examples.
-
-    #     This function uses the model to predict labels for @examples and constructs a confusion matrix.
-
-    #     Args:
-    #         sess: the current TensorFlow session.
-    #         examples: A list of vectorized input/output pairs.
-    #         examples: A list of the original input/output sequence pairs.
-    #     Returns:
-    #         The F1 score for predicting tokens as named entities.
-    #     """
-    #     token_cm = ConfusionMatrix(labels=LBLS)
-
-    #     correct_preds, total_correct, total_preds = 0., 0., 0.
-    #     for _, labels, labels_  in self.output(sess, examples_raw, examples):
-    #         for l, l_ in zip(labels, labels_):
-    #             token_cm.update(l, l_)
-    #         gold = set(get_chunks(labels))
-    #         pred = set(get_chunks(labels_))
-    #         correct_preds += len(gold.intersection(pred))
-    #         total_preds += len(pred)
-    #         total_correct += len(gold)
-
-    #     p = correct_preds / total_preds if correct_preds > 0 else 0
-    #     r = correct_preds / total_correct if correct_preds > 0 else 0
-    #     f1 = 2 * p * r / (p + r) if correct_preds > 0 else 0
-    #     return token_cm, (p, r, f1)
-
-    # def consolidate_predictions(self, examples_raw, examples, preds):
-    #     """Batch the predictions into groups of sentence length.
-    #     """
-    #     assert len(examples_raw) == len(examples)
-    #     assert len(examples_raw) == len(preds)
-
-    #     ret = []
-    #     for i, (sentence, labels) in enumerate(examples_raw):
-    #         _, _, mask = examples[i]
-    #         labels_ = [l for l, m in zip(preds[i], mask) if m] # only select elements of mask.
-    #         assert len(labels_) == len(labels)
-    #         ret.append([sentence, labels, labels_])
-    #     return ret
-
-    # def predict_on_batch(self, sess, inputs_batch, mask_batch):
-    #     feed = self.create_feed_dict(inputs_batch=inputs_batch, mask_batch=mask_batch)
-    #     predictions = sess.run(tf.argmax(self.pred, axis=2), feed_dict=feed)
-    #     return predictions
-
-    # def output(self, sess, inputs_raw, inputs=None):
-    #     """
-    #     Reports the output of the model on examples (uses helper to featurize each example).
-    #     """
-    #     if inputs is None:
-    #         inputs = self.preprocess_sequence_data(self.helper.vectorize(inputs_raw))
-
-    #     preds = []
-    #     prog = Progbar(target=1 + int(len(inputs) / self.config.batch_size))
-    #     for i, batch in enumerate(minibatches(inputs, self.config.batch_size, shuffle=False)):
-    #         # Ignore predict
-    #         batch = batch[:1] + batch[2:]
-    #         preds_ = self.predict_on_batch(sess, *batch)
-    #         preds += list(preds_)
-    #         prog.update(i + 1, [])
-    #     return self.consolidate_predictions(inputs_raw, inputs, preds)    
-
-
-
-
     def train(self, session, saver, dataset, train_dir):
         """
         Implement main training loop
@@ -533,8 +479,6 @@ class QASystem(object):
         :return:
         """
 
-
-
         # some free code to print out number of parameters in your model
         # it's always good to check!
         # you will also want to save your model parameters in train_dir
@@ -547,8 +491,7 @@ class QASystem(object):
         toc = time.time()
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
 
-        train_dataset = dataset[0]
-        val_dataset = dataset[1]
+        train_dataset, val_dataset = dataset
         train_mask = [None, None]
         val_mask = [None, None]
         train_dataset[0], train_mask[0] = self.pad(train_dataset[0],self.max_ctx_len) #train_context_ids
@@ -578,6 +521,7 @@ class QASystem(object):
             self.run_epoch(sess=session, train_examples=train_dataset, dev_set=val_dataset)
             logging.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
+            assert(False)
 
 
 
