@@ -226,11 +226,11 @@ class QASystem(object):
         self.optimizer = get_optimizer("adam")
         self.train_op = self.optimizer(self.learning_rate).minimize(self.loss)
 
-    def pad(self, sequence):
+    def pad(self, sequence, max_length):
         # assumes sequence is a list of lists of word, pads to the longest "sentence"
         # returns (padded_sequence, mask)
         from qa_data import PAD_ID
-        max_length = max(map(len, sequence))
+        #max_length = max(map(len, sequence))
         #print('max_length : {}'.format(max_length))
         padded_sequence = []
         mask = []
@@ -353,7 +353,7 @@ class QASystem(object):
 
         return loss
 
-    def test(self, session, valid_x, valid_y):
+    def test(self, session, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch):
         """
         in here you should compute a cost for your validation set
         and tune your hyperparameters according to the validation set performance
@@ -364,12 +364,12 @@ class QASystem(object):
         # fill in this feed_dictionary like:
         # input_feed['valid_x'] = valid_x
 
-        input_feed[self.context_placeholder] = valid_x[:][0]
-        input_feed[self.question_placeholder] = valid_x[:][1]
-        input_feed[self.mask_ctx_placeholder] = valid_x[:][2]
-        input_feed[self.mask_q_placeholder] = valid_x[:][3]
+        input_feed[self.context_placeholder] = context_batch
+        input_feed[self.question_placeholder] = question_batch
+        input_feed[self.mask_ctx_placeholder] = mask_ctx_batch
+        input_feed[self.mask_q_placeholder] = mask_q_batch
         input_feed[self.dropout_placeholder] = self.flags.dropout
-        input_feed[self.answer_span_placeholder] = valid_y
+        input_feed[self.answer_span_placeholder] = answer_span_batch
 
         # TODO: compute cost for validation set, tune hyperparameters
 
@@ -377,9 +377,9 @@ class QASystem(object):
 
         outputs = session.run(output_feed, input_feed)
 
-        return outputs
+        return outputs[0]
 
-    def decode(self, session, test_x):
+    def decode(self, session, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch):
         """
         Returns the probability distribution over different positions in the paragraph
         so that other methods like self.answer() will be able to work properly
@@ -389,29 +389,36 @@ class QASystem(object):
 
         # fill in this feed_dictionary like:
         # input_feed['test_x'] = test_x
+        
+        #mask_ctx_batch=np.reshape(mask_ctx_batch,(context_batch.shape[0]))
+        #mask_q_batch=np.reshape(mask_q_batch,(context_batch.shape[0]))
+        
 
-        input_feed[self.context_placeholder] = test_x[:][0]
-        input_feed[self.question_placeholder] = test_x[:][1]
-        input_feed[self.mask_ctx_placeholder] = test_x[:][2]
-        input_feed[self.mask_q_placeholder] = test_x[:][3]
+        input_feed[self.context_placeholder] = np.array(map(np.array,context_batch))
+        input_feed[self.question_placeholder] = np.array(map(np.array,question_batch))
+        input_feed[self.mask_ctx_placeholder] = np.array(map(np.array,mask_ctx_batch))
+        input_feed[self.mask_q_placeholder] = np.array(mask_q_batch)
         input_feed[self.dropout_placeholder] = self.flags.dropout
+
 
         output_feed = [self.start_probs, self.end_probs]
 
+        
         outputs = session.run(output_feed, input_feed)
 
         return outputs
 
-    def answer(self, session, test_x):
+    def answer(self, session, data):
 
-        yp, yp2 = self.decode(session, test_x)
+        data = np.array(data).T
+        yp, yp2 = self.decode(session, *data)
 
         a_s = np.argmax(yp, axis=1)
         a_e = np.argmax(yp2, axis=1)
 
         return (a_s, a_e)
 
-    def validate(self, sess, valid_dataset):
+    def validate(self, sess, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch):
         """
         Iterate through the validation dataset and determine what
         the validation cost is.
@@ -423,15 +430,10 @@ class QASystem(object):
 
         :return:
         """
-        valid_cost = 0
 
-        for valid_x, valid_y in valid_dataset:
-          valid_cost += self.test(sess, valid_x, valid_y)
+        return self.test(sess, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch)
 
-
-        return valid_cost
-
-    def evaluate_answer(self, session, dataset, sample=100, log=False):
+    def evaluate_answer(self, session, dataset, context, sample=100, log=False):
         """
         Evaluate the model's performance using the harmonic mean of F1 and Exact Match (EM)
         with the set of true answer labels
@@ -452,112 +454,59 @@ class QASystem(object):
         # TODO: do we have to loop here over batches?
         # TODO: be explicit about structure of dataset input for all of these functions.
 
-        a_s, a_e = self.answer(session, dataset[:4]) 
 
+        # idx = np.random.randint(100, size=2)
+        # sampled = dataset[idx]
 
-        f1 = 0.
-        em = 0.
+        if sample is None:
+            sampled = dataset
+        else:
+            #np.random.seed(0)
+            sampled = dataset[np.random.choice(dataset.shape[0], sample)]
+
+        a_s, a_e = self.answer(session, sampled)
+
+        f1=[]
+        em=[]
+        #embed()
+        sampled = sampled.T
+        for i in range(len(sampled[0])):
+            pred_words=' '.join(context[i][a_s[i]:a_e[i]+1])
+            actual_words=' '.join(context[i][sampled[2][i][0]:sampled[2][i][1]+1])
+            # print('I:',i)
+            # print ("INDICES",a_s[i],a_e[i])
+            # print ("PRED_WORDS:",pred_words)
+            # print ("ACTUAL WORD",actual_words)
+            f1.append(f1_score(pred_words,actual_words))
+            # print('F1:',f1)
+            em.append(exact_match_score(pred_words,actual_words))
+            # print('EM:',em)
+            # print (" ")
 
         if log:
-            logging.info("F1: {}, EM: {}, for {} samples".format(f1, em, sample))
+            logging.info("F1: {}, EM: {}, for {} samples".format(np.mean(f1), None , sample))
 
         return f1, em
 
-
     ### Imported from NERModel
-    def run_epoch(self, sess, train_examples, dev_set):
-        prog = Progbar(target=1 + int(len(train_examples) / self.flags.batch_size))
+    def run_epoch(self, sess, train_examples, dev_set, context):
+        prog_train = Progbar(target=1 + int(len(train_examples) / self.flags.batch_size))
         for i, batch in enumerate(minibatches(train_examples, self.flags.batch_size)):
             loss = self.optimize(sess, *batch)
-            prog.update(i + 1, [("train loss", loss)])
-            #if self.report: self.report.log_train_loss(loss)
+            prog_train.update(i + 1, [("train loss", loss)])
         print("")
 
-        #logger.info("Evaluating on training data")
-        #token_cm, entity_scores = self.evaluate(sess, train_examples, train_examples_raw)
-        #logger.debug("Token-level confusion matrix:\n" + token_cm.as_table())
-        #logger.debug("Token-level scores:\n" + token_cm.summary())
-        #logger.info("Entity level P/R/F1: %.2f/%.2f/%.2f", *entity_scores)
-
-        # logger.info("Evaluating on development data")
-        # token_cm, entity_scores = self.evaluate(sess, dev_set, dev_set_raw)
-        # logger.debug("Token-level confusion matrix:\n" + token_cm.as_table())
-        # logger.debug("Token-level scores:\n" + token_cm.summary())
-        # logger.info("Entity level P/R/F1: %.2f/%.2f/%.2f", *entity_scores)
-
-        # f1 = entity_scores[-1]
-        # return f1
-
-    def evaluate(self, sess, examples, examples_raw):
-        """Evaluates model performance on @examples.
-
-        This function uses the model to predict labels for @examples and constructs a confusion matrix.
-
-        Args:
-            sess: the current TensorFlow session.
-            examples: A list of vectorized input/output pairs.
-            examples: A list of the original input/output sequence pairs.
-        Returns:
-            The F1 score for predicting tokens as named entities.
-        """
-        token_cm = ConfusionMatrix(labels=LBLS)
-
-        correct_preds, total_correct, total_preds = 0., 0., 0.
-        for _, labels, labels_  in self.output(sess, examples_raw, examples):
-            for l, l_ in zip(labels, labels_):
-                token_cm.update(l, l_)
-            gold = set(get_chunks(labels))
-            pred = set(get_chunks(labels_))
-            correct_preds += len(gold.intersection(pred))
-            total_preds += len(pred)
-            total_correct += len(gold)
-
-        p = correct_preds / total_preds if correct_preds > 0 else 0
-        r = correct_preds / total_correct if correct_preds > 0 else 0
-        f1 = 2 * p * r / (p + r) if correct_preds > 0 else 0
-        return token_cm, (p, r, f1)
+        prog_val = Progbar(target=1 + int(len(dev_set) / self.flags.batch_size))
+        for i, batch in enumerate(minibatches(dev_set, self.flags.batch_size)):
+            val_loss = self.validate(sess, *batch)
+            prog_val.update(i + 1, [("val loss", val_loss)])
+            # prog_val.update(i + 1, [("val f1", val_f1)])
+            # prog_val.update(i + 1, [("val em", val_em)])
+        val_f1, val_em = self.evaluate_answer(sess,dev_set, context=context, sample=100, log=True)
+        #print("validation F1 : {}".format(np.mean(val_f1)))
 
 
-    def consolidate_predictions(self, examples_raw, examples, preds):
-        """Batch the predictions into groups of sentence length.
-        """
-        assert len(examples_raw) == len(examples)
-        assert len(examples_raw) == len(preds)
-
-        ret = []
-        for i, (sentence, labels) in enumerate(examples_raw):
-            _, _, mask = examples[i]
-            labels_ = [l for l, m in zip(preds[i], mask) if m] # only select elements of mask.
-            assert len(labels_) == len(labels)
-            ret.append([sentence, labels, labels_])
-        return ret
-
-    def predict_on_batch(self, sess, inputs_batch, mask_batch):
-        feed = self.create_feed_dict(inputs_batch=inputs_batch, mask_batch=mask_batch)
-        predictions = sess.run(tf.argmax(self.pred, axis=2), feed_dict=feed)
-        return predictions
-
-    def output(self, sess, inputs_raw, inputs=None):
-        """
-        Reports the output of the model on examples (uses helper to featurize each example).
-        """
-        if inputs is None:
-            inputs = self.preprocess_sequence_data(self.helper.vectorize(inputs_raw))
-
-        preds = []
-        prog = Progbar(target=1 + int(len(inputs) / self.config.batch_size))
-        for i, batch in enumerate(minibatches(inputs, self.config.batch_size, shuffle=False)):
-            # Ignore predict
-            batch = batch[:1] + batch[2:]
-            preds_ = self.predict_on_batch(sess, *batch)
-            preds += list(preds_)
-            prog.update(i + 1, [])
-        return self.consolidate_predictions(inputs_raw, inputs, preds)    
-
-
-
-
-    def train(self, session, saver, dataset, train_dir):
+    def train(self, session, saver, dataset, contexts, train_dir):
         """
         Implement main training loop
 
@@ -581,47 +530,59 @@ class QASystem(object):
         :return:
         """
 
-
-
         # some free code to print out number of parameters in your model
         # it's always good to check!
         # you will also want to save your model parameters in train_dir
         # so that you can use your trained model to make predictions, or
         # even continue training
 
-        #raise NotImplementedError
-
         tic = time.time()
         params = tf.trainable_variables()
         num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
         toc = time.time()
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
-        mask = [None, None]
-        dataset[0], mask[0] = self.pad(dataset[0]) #context_ids
-        dataset[1], mask[1] = self.pad(dataset[1]) #question_ids
-        for i in range(1,len(dataset[0])):
-            assert len(dataset[0][i]) == len(dataset[0][i - 1]), "Incorrectly padded context"
-            assert len(dataset[1][i]) == len(dataset[1][i - 1]), "Incorrectly padded question"
 
-        print("Training data padding verification completed.")
+        train_dataset, val_dataset = dataset
+        train_mask = [None, None]
+        val_mask = [None, None]
+        train_dataset[0], train_mask[0] = self.pad(train_dataset[0], self.max_ctx_len) #train_context_ids
+        train_dataset[1], train_mask[1] = self.pad(train_dataset[1], self.max_q_len) #train_question_ids
+
+        val_dataset[0], val_mask[0] = self.pad(val_dataset[0], self.max_ctx_len) #val_context_ids
+        val_dataset[1], val_mask[1] = self.pad(val_dataset[1], self.max_q_len) #val_question_ids
+
+
+        for i in range(1,len(train_dataset[0])):
+            assert len(train_dataset[0][i]) == len(train_dataset[0][i - 1]), "Incorrectly padded train context"
+            assert len(train_dataset[1][i]) == len(train_dataset[1][i - 1]), "Incorrectly padded train question"
+
+        for i in range(1,len(val_dataset[0])):
+            assert len(val_dataset[0][i]) == len(val_dataset[0][i - 1]), "Incorrectly padded val context"
+            assert len(val_dataset[1][i]) == len(val_dataset[1][i - 1]), "Incorrectly padded val question"
+
+        print("Training/val data padding verification completed.")
         
-        dataset.extend(mask)
-        dataset = np.array(dataset).T
-        # train_data = dataset[:2].extend(mask)
-        # train_y = dataset[2]
+        train_dataset.extend(train_mask)
+        val_dataset.extend(val_mask)
+        train_dataset = np.array(train_dataset).T
+        val_dataset = np.array(val_dataset).T
+
+        train_context = contexts[0]
+        dev_context = contexts[1]
 
         num_epochs = self.flags.epochs
 
         if self.flags.debug:
-            dataset = dataset[:self.flags.batch_size]
+            train_dataset = train_dataset[:self.flags.batch_size]
             num_epochs = 100
 
         for epoch in range(num_epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
-            self.run_epoch(sess=session, train_examples=dataset, dev_set=None)
+            self.run_epoch(sess=session, train_examples=train_dataset, dev_set=val_dataset, context = dev_context)
             logging.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
 
+        self.evaluate_answer(session, val_dataset, dev_context, sample=None, log=True)
 
 
 

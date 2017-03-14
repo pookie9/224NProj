@@ -20,7 +20,7 @@ tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this nor
 tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
-tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
+tf.app.flags.DEFINE_integer("state_size", 50, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("output_size", 750, "The output size of your model.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
@@ -35,7 +35,7 @@ tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embeddin
 
 # added
 tf.app.flags.DEFINE_string("model_type", "gru", "specify either gru or lstm cell type for encoding")
-tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
+tf.app.flags.DEFINE_integer("debug", 1, "whether to set debug or not")
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -65,14 +65,15 @@ def initialize_vocab(vocab_path):
     else:
         raise ValueError("Vocabulary file %s not found.", vocab_path)
 
-def initialize_data(data_path):
+def initialize_data(data_path,keep_as_string=False):
     if tf.gfile.Exists(data_path):
         print ("LOADING:",data_path)
         dataset = []
         with tf.gfile.GFile(data_path, mode="rb") as f:
             dataset.extend(f.readlines())
         dataset = [line.strip('\n').split() for line in dataset]
-        dataset = [[int(num) for num in line] for line in dataset]
+        if not keep_as_string:
+            dataset = [[int(num) for num in line] for line in dataset]
         return dataset
     else:
         raise ValueError("Vocabulary file %s not found.", data_path)
@@ -117,14 +118,29 @@ def main(_):
     context_ids_path = pjoin(FLAGS.data_dir, "train.ids.context")
     question_ids_path = pjoin(FLAGS.data_dir, "train.ids.question")
     answer_span_path = pjoin(FLAGS.data_dir, "train.span")
+    val_context_ids_path = pjoin(FLAGS.data_dir, "val.ids.context")
+    val_question_ids_path = pjoin(FLAGS.data_dir, "val.ids.question")
+    val_answer_span_path = pjoin(FLAGS.data_dir, "val.span")
+
+    context_path = pjoin(FLAGS.data_dir, "train.context")
+    val_context_path = pjoin(FLAGS.data_dir, "val.context")
 
     context_ids = initialize_data(context_ids_path)
     question_ids = initialize_data(question_ids_path)
     answer_spans = initialize_data(answer_span_path)
-    dataset = [context_ids, question_ids, answer_spans]
+    context = initialize_data(context_path, keep_as_string=True)
+    val_context_ids = initialize_data(val_context_ids_path)
+    val_question_ids = initialize_data(val_question_ids_path)
+    val_answer_spans = initialize_data(val_answer_span_path)
+    val_context = initialize_data(val_context_path, keep_as_string=True)
 
-    max_ctx_len = max(map(len, context_ids))
-    max_q_len = max(map(len, question_ids))
+    train_dataset = [context_ids,question_ids,answer_spans]
+    val_dataset = [val_context_ids,val_question_ids,val_answer_spans]
+    contexts = [context,val_context]
+    dataset = (train_dataset,val_dataset)
+
+    max_ctx_len = max(max(map(len, context_ids)), max(map(len, val_context_ids)))
+    max_q_len = max(max(map(len, question_ids)), max(map(len, val_question_ids)))
     
     embeddings = initialize_embeddings(embed_path)
     
@@ -161,9 +177,9 @@ def main(_):
         save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
         saver = tf.train.Saver()
 
-        qa.train(sess, saver, dataset, save_train_dir)
+        qa.train(sess, saver, dataset, contexts, save_train_dir)
 
-        qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
+        #qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
 
 if __name__ == "__main__":
     tf.app.run()
