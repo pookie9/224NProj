@@ -107,7 +107,7 @@ class Encoder(object):
         self.vocab_dim = vocab_dim
         self.name = name
 
-    def encode(self, inputs, masks, encoder_state_input=None, attention_inputs=None, model_type="gru",dropout=0.0):
+    def encode(self, inputs, masks, encoder_state_input=(None,None), attention_inputs=None, model_type="gru",dropout=0.0):
         """
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
@@ -125,32 +125,37 @@ class Encoder(object):
                  or both.
         """
         with tf.variable_scope(self.name):
-
             # Define the correct cell type.
             if attention_inputs is None:
                 if model_type == "gru":
-                    cell = tf.nn.rnn_cell.GRUCell(self.size)
+                    fw_cell = tf.nn.rnn_cell.GRUCell(self.size)
+                    bw_cell = tf.nn.rnn_cell.GRUCell(self.size)
                 elif model_type == "lstm":
-                    cell = tf.nn.rnn_cell.BasicLSTMCell(self.size)
+                    fw_cell = tf.nn.rnn_cell.BasicLSTMCell(self.size)
+                    bw_cell = tf.nn.rnn_cell.BasicLSTMCell(self.size)
                 else:
                     raise Exception('Must specify model type.')
             else:
                 # use an attention cell - each cell uses attention to compute context
                 # over the @attention_inputs
                 if model_type == "gru":
-                    cell = GRUAttnCell(self.size, attention_inputs)
+                    fw_cell = GRUAttnCell(self.size, attention_inputs)
+                    bw_cell = GRUAttnCell(self.size, attention_inputs)
                 elif model_type == "lstm":
-                    cell = LSTMAttnCell(self.size, attention_inputs)
+                    fw_cell = LSTMAttnCell(self.size, attention_inputs)
+                    bw_cell = LSTMAttnCell(self.size, attention_inputs)
                 else:
                     raise Exception('Must specify model type.')                
             #cell=DropoutCell(cell,1.0-dropout)
             #outputs, final_state = tf.nn.dynamic_rnn(cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=encoder_state_input)
-            outputs, final_state = tf.nn.dynamic_bidirectional_rnn(cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=encoder_state_input)
-            
-        return outputs, final_state
-
-        # cell_fw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
-        # cell_bw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
+            outputs, final_state = tf.nn.bidirectional_dynamic_rnn(fw_cell,bw_cell,inputs,sequence_length=masks,dtype=tf.float32,initial_state_fw=encoder_state_input[0],initial_state_bw=encoder_state_input[1])
+            if model_type=="gru":
+                concatted_final_state=tf.concat(1,final_state)
+                outputs=tf.concat(2,outputs)
+            else:
+                print ("WRONG MODEL TYPE")
+                exit(1)
+        return outputs, concatted_final_state,final_state
 
 
         # # TODO: see shape of output_states
@@ -237,18 +242,22 @@ class QASystem(object):
         self.learning_rate = tf.train.exponential_decay(self.starter_learning_rate, self.global_step,
                                            100000, 0.96, staircase=True)
         self.optimizer = get_optimizer("adam")
+        #Doing gradient clipping
         self.optimizer=self.optimizer(self.learning_rate)
         gvs=self.optimizer.compute_gradients(self.loss)
-        capped_gvs=[(tf.clip_by_value(grad,-self.flags.max_gradient_norm, self.flags.max_gradient_norm),var)for grad,var in gvs]
+        capped_gvs=[]
+        for grad,var in gvs:
+            if grad is None:
+                capped_gvs.append((grad,var))#Sometimes None is the gradient, often if rnn is initialized with None
+            else:
+                capped_gvs.append((tf.clip_by_value(grad,-self.flags.max_gradient_norm, self.flags.max_gradient_norm),var))
         self.train_op=self.optimizer.apply_gradients(capped_gvs)#NOTE: I don't specify to minimize anywhere...Not sure if I should...
-        #self.train_op = self.optimizer(self.learning_rate).minimize(self.loss)
+        #self.train_op = self.optimizer(self.learning_rate).minimize(self.loss) #No gradient clipping
 
     def pad(self, sequence, max_length):
         # assumes sequence is a list of lists of word, pads to the longest "sentence"
         # returns (padded_sequence, mask)
         from qa_data import PAD_ID
-        #max_length = max(map(len, sequence))
-        #print('max_length : {}'.format(max_length))
         padded_sequence = []
         mask = []
         for sentence in sequence:
@@ -256,34 +265,6 @@ class QASystem(object):
             sentence.extend([PAD_ID] * (max_length - len(sentence)))
             padded_sequence.append(sentence)
         return (padded_sequence, mask)
-
-    # def setup_attention_vector(self, context_vectors, question_rep):
-    #     #context_vectors is a list of the hidden states of the context
-    #     #question_rep are the final forward and backward states of the encoder for the question concatenated
-    #     #Does part 3 in original handout
-    #     W = tf.get_variable("W", shape=[context_vectors[0].get_shape()[0], question_rep.get_shape()[0]],
-    #                              initializer=tf.contrib.layers.xavier_initializer())
-    #     #attention = [tf.nn.softmax(tf.matmul(tf.matmul(tf.transpose(ctx), W), question_rep)) for ctx in context_vectors]
-        
-
-    #     # TODO: ask TA how to handle batch size stuff here...
-    #     attention = tf.nn.softmax(tf.sum(tf.matmul(tf.matmul(question_rep, W), context_vectors)))
-    #     return attention
-
-    # def concat_most_aligned(self, question_states, cur_ctx):
-    #     #Does part 4 in original handout
-    #     #question_states is a list of all of the hidden states for the question, cur_ctx is the current context word
-    #     #returns a concatenation of [cur_ctx, q*] where q* is the most aligned question word
-    #     U = tf.get_variable("U", shape=[cur_ctx.get_shape()[0], question_states[0].get_shape()[0]],
-    #                              initializer=tf.contrib.layers.xavier_initializer())#maybe need to add reuse variable?
-    #     attention = [tf.nn.softmax(tf.matmul(tf.matmul(tf.transpose(cur_ctx), W), q)) for q in question_states]
-    #     most_aligned = (0.0, None)
-
-    #     # TODO: change this to completely use tensorflow functions (like argmax)
-    #     for i in range(len(attention)):
-    #         if attention[i] > most_aligned:
-    #             most_aligned = (attention[i], question_states[i])
-    #     return tf.concat([cur_ctx,most_aligned[0]], 1)
 
 
     def setup_system(self):
@@ -295,15 +276,16 @@ class QASystem(object):
         """
 
         # simple encoder stuff here
-        question_states, final_question_state = self.question_encoder.encode(self.question_embeddings, self.mask_q_placeholder, 
-                                                                             encoder_state_input=None, 
+
+        question_states, final_question_state,ctx_input = self.question_encoder.encode(self.question_embeddings, self.mask_q_placeholder, 
+                                                                             encoder_state_input=(None,None), 
                                                                              attention_inputs=None, 
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
-        ctx_states, final_ctx_state = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
-                                                                             encoder_state_input=None,#final_question_state, 
-                                                                             attention_inputs=question_states,
-                                                                             model_type=self.flags.model_type,dropout=self.flags.dropout)
 
+        ctx_states, final_ctx_state,_ = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
+                                                                             encoder_state_input=(None,None), #ctx_input
+                                                                             attention_inputs=None, #question_states
+                                                                             model_type=self.flags.model_type,dropout=self.flags.dropout)
         # decoder takes encoded representation to probability dists over start / end index
         self.start_probs, self.end_probs = self.decoder.decode(final_ctx_state)
 
@@ -522,6 +504,7 @@ class QASystem(object):
             # prog_val.update(i + 1, [("val f1", val_f1)])
             # prog_val.update(i + 1, [("val em", val_em)])
         val_f1, val_em = self.evaluate_answer(sess,train_examples, context=context, sample=100, log=True)#CHANGE HERE
+        print ("TRAIN F1",val_f1)
         #print("validation F1 : {}".format(np.mean(val_f1)))
 
 
