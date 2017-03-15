@@ -291,17 +291,31 @@ class QASystem(object):
         # ==== set up training/updating procedure ====
         self.global_step = tf.Variable(0, trainable=False)
         self.starter_learning_rate = self.flags.learning_rate
-        self.learning_rate = tf.train.exponential_decay(self.starter_learning_rate, self.global_step,
-                                           100000, 0.96, staircase=True)
+
+        self.learning_rate = self.starter_learning_rate
+
+        # learning rate decay
+        # self.learning_rate = tf.train.exponential_decay(self.starter_learning_rate, self.global_step,
+        #                                    1000, 0.96, staircase=True)
+
         self.optimizer = get_optimizer("adam")
-        self.train_op = self.optimizer(self.learning_rate).minimize(self.loss)
+        
+        if self.flags.grad_clip:
+            # gradient clipping
+            self.optimizer = self.optimizer(self.learning_rate)
+            grads = self.optimizer.compute_gradients(self.loss)
+            for i, (grad, var) in enumerate(grads):
+                if grad is not None:
+                    grads[i] = (tf.clip_by_norm(grad, self.flags.max_gradient_norm), var)
+            self.train_op = self.optimizer.apply_gradients(grads, global_step=self.global_step) #NOTE: I don't specify to minimize anywhere...Not sure if I should...  
+        else:
+            self.train_op = self.optimizer(self.learning_rate).minimize(self.loss, global_step=self.global_step) #No gradient clipping
+
 
     def pad(self, sequence, max_length):
         # assumes sequence is a list of lists of word, pads to the longest "sentence"
         # returns (padded_sequence, mask)
         from qa_data import PAD_ID
-        #max_length = max(map(len, sequence))
-        #print('max_length : {}'.format(max_length))
         padded_sequence = []
         mask = []
         for sentence in sequence:
@@ -324,7 +338,7 @@ class QASystem(object):
                                                                              attention_inputs=None, 
                                                                              model_type=self.flags.model_type)
         ctx_states, final_ctx_state = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
-                                                                             encoder_state_input=None,#final_question_state, 
+                                                                             encoder_state_input=None, #final_question_state, 
                                                                              attention_inputs=question_states,
                                                                              model_type=self.flags.model_type)
 
@@ -415,16 +429,9 @@ class QASystem(object):
         """
         input_feed = {}
 
-        # fill in this feed_dictionary like:
-        # input_feed['test_x'] = test_x
-        
-        #mask_ctx_batch=np.reshape(mask_ctx_batch,(context_batch.shape[0]))
-        #mask_q_batch=np.reshape(mask_q_batch,(context_batch.shape[0]))
-        
-
-        input_feed[self.context_placeholder] = np.array(map(np.array,context_batch))
-        input_feed[self.question_placeholder] = np.array(map(np.array,question_batch))
-        input_feed[self.mask_ctx_placeholder] = np.array(map(np.array,mask_ctx_batch))
+        input_feed[self.context_placeholder] = np.array(map(np.array, context_batch))
+        input_feed[self.question_placeholder] = np.array(map(np.array, question_batch))
+        input_feed[self.mask_ctx_placeholder] = np.array(map(np.array, mask_ctx_batch))
         input_feed[self.mask_q_placeholder] = np.array(mask_q_batch)
         input_feed[self.dropout_placeholder] = self.flags.dropout
 
@@ -461,7 +468,7 @@ class QASystem(object):
 
         return self.test(sess, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch)
 
-    def evaluate_answer(self, session, dataset, context, sample=100, log=False):
+    def evaluate_answer(self, session, dataset, context, sample=100, log=False, eval_set='train'):
         """
         Evaluate the model's performance using the harmonic mean of F1 and Exact Match (EM)
         with the set of true answer labels
@@ -477,15 +484,6 @@ class QASystem(object):
         :return:
         """
 
-        # iterate over dataset, calling answer method
-
-        # TODO: do we have to loop here over batches?
-        # TODO: be explicit about structure of dataset input for all of these functions.
-
-
-        # idx = np.random.randint(100, size=2)
-        # sampled = dataset[idx]
-
         if sample is None:
             sampled = dataset
         else:
@@ -496,7 +494,7 @@ class QASystem(object):
 
         f1=[]
         em=[]
-
+        #embed()
         sampled = sampled.T
         for i in range(len(sampled[0])):
             pred_words=' '.join(context[i][a_s[i]:a_e[i]+1])
@@ -512,28 +510,26 @@ class QASystem(object):
             # print (" ")
 
         if log:
-            logging.info("F1: {}, EM: {}, for {} samples".format(np.mean(f1), None , sample))
-
+            logging.info("{},F1: {}, EM: {}, for {} samples".format(eval_set,np.mean(f1), None , sample))
+        f1=sum(f1)/len(f1)
+        em=sum(em)/len(em)
         return f1, em
 
     ### Imported from NERModel
-    def run_epoch(self, sess, train_examples, dev_set, context):
-        prog_train = Progbar(target=1 + int(len(train_examples) / self.flags.batch_size))
-        for i, batch in enumerate(minibatches(train_examples, self.flags.batch_size)):
+    def run_epoch(self, sess, train_set, val_set, context):
+        prog_train = Progbar(target=1 + int(len(train_set) / self.flags.batch_size))
+        for i, batch in enumerate(minibatches(train_set, self.flags.batch_size)):
             loss = self.optimize(sess, *batch)
             prog_train.update(i + 1, [("train loss", loss)])
         print("")
 
-        if not self.flags.debug:
-            prog_val = Progbar(target=1 + int(len(dev_set) / self.flags.batch_size))
-            for i, batch in enumerate(minibatches(dev_set, self.flags.batch_size)):
-                val_loss = self.validate(sess, *batch)
-                prog_val.update(i + 1, [("val loss", val_loss)])
-                # prog_val.update(i + 1, [("val f1", val_f1)])
-                # prog_val.update(i + 1, [("val em", val_em)])
-            val_f1, val_em = self.evaluate_answer(sess,dev_set, context=context, sample=100, log=True)
-            #print("validation F1 : {}".format(np.mean(val_f1)))
-
+        prog_val = Progbar(target=1 + int(len(val_set) / self.flags.batch_size))
+        for i, batch in enumerate(minibatches(val_set, self.flags.batch_size)):
+            val_loss = self.validate(sess, *batch)
+            prog_val.update(i + 1, [("val loss", val_loss)])
+        print("")
+        train_f1, train_em = self.evaluate_answer(sess,train_set, context=context[0], sample=100, log=True, eval_set="-TRAIN-")
+        val_f1, val_em = self.evaluate_answer(sess,val_set, context=context[1], sample=100, log=True, eval_set="-VAL-")
 
     def train(self, session, saver, dataset, contexts, train_dir):
         """
@@ -572,6 +568,7 @@ class QASystem(object):
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
 
         train_dataset, val_dataset = dataset
+
         train_mask = [None, None]
         val_mask = [None, None]
         train_dataset[0], train_mask[0] = self.pad(train_dataset[0], self.max_ctx_len) #train_context_ids
@@ -590,24 +587,28 @@ class QASystem(object):
             assert len(val_dataset[1][i]) == len(val_dataset[1][i - 1]), "Incorrectly padded val question"
 
         print("Training/val data padding verification completed.")
-        
+
         train_dataset.extend(train_mask)
         val_dataset.extend(val_mask)
+
+        # take transpose to be shape [None, num_examples]
         train_dataset = np.array(train_dataset).T
         val_dataset = np.array(val_dataset).T
 
         train_context = contexts[0]
-        dev_context = contexts[1]
+        val_context = contexts[1]
 
         num_epochs = self.flags.epochs
 
         if self.flags.debug:
             train_dataset = train_dataset[:self.flags.batch_size]
+            val_dataset = val_dataset[:self.flags.batch_size]
             num_epochs = 100
 
         for epoch in range(num_epochs):
+            #print(session.run([self.learning_rate]))
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
-            self.run_epoch(sess=session, train_examples=train_dataset, dev_set=val_dataset, context = dev_context)
+            self.run_epoch(sess=session, train_set=train_dataset, val_set=val_dataset, context=val_context)
             logging.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
 
