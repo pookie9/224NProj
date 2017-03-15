@@ -14,7 +14,7 @@ from util import Progbar, minibatches
 
 from evaluate import exact_match_score, f1_score
 
-#from IPython import embed
+from IPython import embed
 
 logging.basicConfig(level=logging.INFO)
 
@@ -73,14 +73,12 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
             # scores is shape (batch_size, N, 1)
             scores = tf.reduce_sum(self.attn_states * ht, reduction_indices=2, keep_dims=True)
 
-            #Normalizing
-            scores = tf.exp(scores - tf.reduce_max(scores, reduction_indices=0, keep_dims=True))
-            scores = scores / (1e-6 + tf.reduce_sum(scores, reduction_indices=0, keep_dims=True))
-            
             # compute context vector using linear combination of attention states with
             # weights given by attention vector.
             # context is shape (batch_size, hid_dim)
-            
+
+            scores = tf.exp(scores-tf.reduce_max(scores,reduction_indices=0,keep_dims=True))
+            scores = scores/(1e-6 +tf.reduce_sum(scores,reduction_indices=0,keep_dims=True))
             context = tf.reduce_sum(self.attn_states * scores, reduction_indices=1)
 
             with tf.variable_scope("AttnConcat"):
@@ -144,8 +142,8 @@ class Encoder(object):
                 # use an attention cell - each cell uses attention to compute context
                 # over the @attention_inputs
                 if model_type == "gru":
-                    fw_cell = GRUAttnCell(self.size, attention_inputs[0],scope="ctx")
-                    bw_cell = GRUAttnCell(self.size, attention_inputs[1],scope="ctx")
+                    fw_cell = GRUAttnCell(self.size, attention_inputs[0])
+                    bw_cell = GRUAttnCell(self.size, attention_inputs[1])
                 elif model_type == "lstm":
                     fw_cell = LSTMAttnCell(self.size, attention_inputs[0])
                     bw_cell = LSTMAttnCell(self.size, attention_inputs[1])
@@ -288,8 +286,8 @@ class QASystem(object):
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
 
         ctx_states, final_ctx_state,_,_ = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
-                                                                             encoder_state_input=ctx_input
-                                                                             attention_inputs=ctx_att_input, #question_states
+                                                                             encoder_state_input=ctx_input,
+                                                                             attention_inputs=ctx_att_input,
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
         # decoder takes encoded representation to probability dists over start / end index
         self.start_probs, self.end_probs = self.decoder.decode(final_ctx_state)
@@ -437,7 +435,7 @@ class QASystem(object):
 
         return self.test(sess, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch)
 
-    def evaluate_answer(self, session, dataset, context, sample=100, log=False):
+    def evaluate_answer(self, session, dataset, context, sample=100, log=False, eval_set='train'):
         """
         Evaluate the model's performance using the harmonic mean of F1 and Exact Match (EM)
         with the set of true answer labels
@@ -488,28 +486,29 @@ class QASystem(object):
             # print (" ")
 
         if log:
-            logging.info("F1: {}, EM: {}, for {} samples".format(np.mean(f1), None , sample))
+        	logging.info("{},F1: {}, EM: {}, for {} samples".format(eval_set,np.mean(f1), None , sample))
         f1=sum(f1)/len(f1)
         em=sum(em)/len(em)
         return f1, em
 
     ### Imported from NERModel
-    def run_epoch(self, sess, train_examples, dev_set, context):
-        prog_train = Progbar(target=1 + int(len(train_examples) / self.flags.batch_size))
-        for i, batch in enumerate(minibatches(train_examples, self.flags.batch_size)):
+    def run_epoch(self, sess, train_set, val_set, context):
+        prog_train = Progbar(target=1 + int(len(train_set) / self.flags.batch_size))
+        for i, batch in enumerate(minibatches(train_set, self.flags.batch_size)):
             loss = self.optimize(sess, *batch)
             prog_train.update(i + 1, [("train loss", loss)])
         print("")
 
-        prog_val = Progbar(target=1 + int(len(dev_set) / self.flags.batch_size))
-        for i, batch in enumerate(minibatches(dev_set, self.flags.batch_size)):
+        prog_val = Progbar(target=1 + int(len(val_set) / self.flags.batch_size))
+        for i, batch in enumerate(minibatches(val_set, self.flags.batch_size)):
             break
             val_loss = self.validate(sess, *batch)
             prog_val.update(i + 1, [("val loss", val_loss)])
             # prog_val.update(i + 1, [("val f1", val_f1)])
             # prog_val.update(i + 1, [("val em", val_em)])
-        val_f1, val_em = self.evaluate_answer(sess,train_examples, context=context, sample=100, log=True)#CHANGE HERE
-        print ("TRAIN F1",val_f1)
+        train_f1, train_em = self.evaluate_answer(sess,train_set, context=context[0], sample=100, log=True, eval_set="-TRAIN-")
+        val_f1, val_em = self.evaluate_answer(sess,val_set, context=context[1], sample=100, log=True, eval_set="-VAL-")
+        #print ("TRAIN F1",val_f1)
         #print("validation F1 : {}".format(np.mean(val_f1)))
 
 
@@ -575,21 +574,21 @@ class QASystem(object):
         val_dataset = np.array(val_dataset).T
 
         train_context = contexts[0]
-        dev_context = contexts[1]
+        val_context = contexts[1]
 
         num_epochs = self.flags.epochs
 
         if self.flags.debug:
             train_dataset = train_dataset[:self.flags.batch_size]
-            num_epochs = 100
+            num_epochs = 2
 
         for epoch in range(num_epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
-            self.run_epoch(sess=session, train_examples=train_dataset, dev_set=val_dataset, context = train_context)
+            self.run_epoch(sess=session, train_set=train_dataset, val_set=val_dataset, context = (train_context,val_context))
             logging.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
 
-        self.evaluate_answer(session, val_dataset, dev_context, sample=None, log=True)
+        self.evaluate_answer(session, val_dataset, val_context, sample=None, log=True,eval_set="final_val")
 
 
 
