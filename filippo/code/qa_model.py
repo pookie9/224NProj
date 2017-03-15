@@ -76,6 +76,9 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
             # compute context vector using linear combination of attention states with
             # weights given by attention vector.
             # context is shape (batch_size, hid_dim)
+
+            scores = tf.exp(scores-tf.reduce_max(scores,reduction_indices=0,keep_dims=True))
+            scores = scores/(1e-6 +tf.reduce_sum(scores,reduction_indices=0,keep_dims=True))
             context = tf.reduce_sum(self.attn_states * scores, reduction_indices=1)
 
             with tf.variable_scope("AttnConcat"):
@@ -88,7 +91,7 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
 
                 concat_vec = tf.concat(1, [context, gru_out])
 
-                out = tf.nn.tanh(tf.matmul(concat_vec, W_c) + b_c)
+                out = tf.nn.relu(tf.matmul(concat_vec, W_c) + b_c)
 
             return (out, out)
 
@@ -576,7 +579,7 @@ class QASystem(object):
 
         if self.flags.debug:
             train_dataset = train_dataset[:self.flags.batch_size]
-            num_epochs = 20
+            num_epochs = 200
 
         for epoch in range(num_epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
