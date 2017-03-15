@@ -34,7 +34,7 @@ tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab 
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 
 # added
-tf.app.flags.DEFINE_string("model_type", "lstm", "specify either gru or lstm cell type for encoding")
+tf.app.flags.DEFINE_string("model_type", "gru", "specify either gru or lstm cell type for encoding")
 tf.app.flags.DEFINE_integer("debug", 1, "whether to set debug or not")
 
 
