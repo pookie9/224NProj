@@ -435,7 +435,11 @@ class QASystem(object):
 
         return self.test(sess, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch)
 
+<<<<<<< HEAD
     def evaluate_answer(self, session, dataset, context, sample=100, log=False, eval_set='train'):
+=======
+    def evaluate_answer(self, session, dataset, context, sample=100, log=False,name=None):
+>>>>>>> c244b8537bd62e089f9f5fefaa58b4c2f4b84ca6
         """
         Evaluate the model's performance using the harmonic mean of F1 and Exact Match (EM)
         with the set of true answer labels
@@ -486,7 +490,11 @@ class QASystem(object):
             # print (" ")
 
         if log:
+<<<<<<< HEAD
         	logging.info("{},F1: {}, EM: {}, for {} samples".format(eval_set,np.mean(f1), None , sample))
+=======
+            logging.info(name+"F1: {}, EM: {}, for {} samples".format(np.mean(f1), None , sample))
+>>>>>>> c244b8537bd62e089f9f5fefaa58b4c2f4b84ca6
         f1=sum(f1)/len(f1)
         em=sum(em)/len(em)
         return f1, em
@@ -506,9 +514,14 @@ class QASystem(object):
             prog_val.update(i + 1, [("val loss", val_loss)])
             # prog_val.update(i + 1, [("val f1", val_f1)])
             # prog_val.update(i + 1, [("val em", val_em)])
+<<<<<<< HEAD
         train_f1, train_em = self.evaluate_answer(sess,train_set, context=context[0], sample=100, log=True, eval_set="-TRAIN-")
         val_f1, val_em = self.evaluate_answer(sess,val_set, context=context[1], sample=100, log=True, eval_set="-VAL-")
         #print ("TRAIN F1",val_f1)
+=======
+        train_f1, train_em = self.evaluate_answer(sess,train_examples, context=context[0], sample=100, log=True,name="TRAIN")#CHANGE HERE
+        val_f1, val_em = self.evaluate_answer(sess,dev_set, context=context[1], sample=100, log=True,name="VAL")#CHANGE HERE
+>>>>>>> c244b8537bd62e089f9f5fefaa58b4c2f4b84ca6
         #print("validation F1 : {}".format(np.mean(val_f1)))
 
 
@@ -580,11 +593,19 @@ class QASystem(object):
 
         if self.flags.debug:
             train_dataset = train_dataset[:self.flags.batch_size]
+<<<<<<< HEAD
             num_epochs = 2
 
         for epoch in range(num_epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
             self.run_epoch(sess=session, train_set=train_dataset, val_set=val_dataset, context = (train_context,val_context))
+=======
+            num_epochs = 200
+
+        for epoch in range(num_epochs):
+            logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
+            self.run_epoch(sess=session, train_examples=train_dataset, dev_set=val_dataset, context = (train_context,dev_context))
+>>>>>>> c244b8537bd62e089f9f5fefaa58b4c2f4b84ca6
             logging.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
 
