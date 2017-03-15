@@ -73,9 +73,14 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
             # scores is shape (batch_size, N, 1)
             scores = tf.reduce_sum(self.attn_states * ht, reduction_indices=2, keep_dims=True)
 
+            #Normalizing
+            scores = tf.exp(scores - tf.reduce_max(scores, reduction_indices=0, keep_dims=True))
+            scores = scores / (1e-6 + tf.reduce_sum(scores, reduction_indices=0, keep_dims=True))
+            
             # compute context vector using linear combination of attention states with
             # weights given by attention vector.
             # context is shape (batch_size, hid_dim)
+            
             context = tf.reduce_sum(self.attn_states * scores, reduction_indices=1)
 
             with tf.variable_scope("AttnConcat"):
@@ -126,7 +131,7 @@ class Encoder(object):
         """
         with tf.variable_scope(self.name):
             # Define the correct cell type.
-            if attention_inputs is None:
+            if attention_inputs[0] is None:
                 if model_type == "gru":
                     fw_cell = tf.nn.rnn_cell.GRUCell(self.size)
                     bw_cell = tf.nn.rnn_cell.GRUCell(self.size)
@@ -139,8 +144,8 @@ class Encoder(object):
                 # use an attention cell - each cell uses attention to compute context
                 # over the @attention_inputs
                 if model_type == "gru":
-                    fw_cell = GRUAttnCell(self.size, attention_inputs[0])
-                    bw_cell = GRUAttnCell(self.size, attention_inputs[1])
+                    fw_cell = GRUAttnCell(self.size, attention_inputs[0],scope="ctx")
+                    bw_cell = GRUAttnCell(self.size, attention_inputs[1],scope="ctx")
                 elif model_type == "lstm":
                     fw_cell = LSTMAttnCell(self.size, attention_inputs[0])
                     bw_cell = LSTMAttnCell(self.size, attention_inputs[1])
@@ -150,7 +155,7 @@ class Encoder(object):
             #outputs, final_state = tf.nn.dynamic_rnn(cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=encoder_state_input)
             outputs, final_state = tf.nn.bidirectional_dynamic_rnn(fw_cell,bw_cell,inputs,sequence_length=masks,dtype=tf.float32,initial_state_fw=encoder_state_input[0],initial_state_bw=encoder_state_input[1])
             if model_type=="gru":
-                concatted_final_state=tf.concat(1,final_state)
+                concat_final_state=tf.concat(1,final_state)
                 concat_outputs=tf.concat(2,outputs)
             else:
                 print ("WRONG MODEL TYPE")
@@ -283,7 +288,7 @@ class QASystem(object):
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
 
         ctx_states, final_ctx_state,_,_ = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
-                                                                             encoder_state_input=(None,None), #ctx_input
+                                                                             encoder_state_input=ctx_input
                                                                              attention_inputs=ctx_att_input, #question_states
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
         # decoder takes encoded representation to probability dists over start / end index
