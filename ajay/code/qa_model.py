@@ -74,7 +74,7 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
 
                 concat_vec = tf.concat(1, [context, gru_out])
 
-                out = tf.nn.softsign(tf.matmul(concat_vec, W_c) + b_c)
+                out = tf.nn.tanh(tf.matmul(concat_vec, W_c) + b_c)
 
             return (out, out)
 
@@ -496,14 +496,14 @@ class QASystem(object):
             prog_train.update(i + 1, [("train loss", loss)])
         print("")
 
-        prog_val = Progbar(target=1 + int(len(dev_set) / self.flags.batch_size))
-        for i, batch in enumerate(minibatches(dev_set, self.flags.batch_size)):
-            val_loss = self.validate(sess, *batch)
-            prog_val.update(i + 1, [("val loss", val_loss)])
-            # prog_val.update(i + 1, [("val f1", val_f1)])
-            # prog_val.update(i + 1, [("val em", val_em)])
-        val_f1, val_em = self.evaluate_answer(sess,dev_set, context=context, sample=100, log=True)
-        #print("validation F1 : {}".format(np.mean(val_f1)))
+        # prog_val = Progbar(target=1 + int(len(dev_set) / self.flags.batch_size))
+        # for i, batch in enumerate(minibatches(dev_set, self.flags.batch_size)):
+        #     val_loss = self.validate(sess, *batch)
+        #     prog_val.update(i + 1, [("val loss", val_loss)])
+        #     # prog_val.update(i + 1, [("val f1", val_f1)])
+        #     # prog_val.update(i + 1, [("val em", val_em)])
+        # val_f1, val_em = self.evaluate_answer(sess,dev_set, context=context, sample=100, log=True)
+        # #print("validation F1 : {}".format(np.mean(val_f1)))
 
 
     def train(self, session, saver, dataset, contexts, train_dir):
