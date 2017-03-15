@@ -14,7 +14,7 @@ from util import Progbar, minibatches
 
 from evaluate import exact_match_score, f1_score
 
-#from IPython import embed
+from IPython import embed
 
 logging.basicConfig(level=logging.INFO)
 
@@ -88,7 +88,7 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
 
                 concat_vec = tf.concat(1, [context, gru_out])
 
-                out = tf.nn.relu(tf.matmul(concat_vec, W_c) + b_c)
+                out = tf.nn.tanh(tf.matmul(concat_vec, W_c) + b_c)
 
             return (out, out)
 
@@ -126,7 +126,7 @@ class Encoder(object):
         """
         with tf.variable_scope(self.name):
             # Define the correct cell type.
-            if attention_inputs is None:
+            if attention_inputs[0] is None:
                 if model_type == "gru":
                     fw_cell = tf.nn.rnn_cell.GRUCell(self.size)
                     bw_cell = tf.nn.rnn_cell.GRUCell(self.size)
@@ -150,7 +150,7 @@ class Encoder(object):
             #outputs, final_state = tf.nn.dynamic_rnn(cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=encoder_state_input)
             outputs, final_state = tf.nn.bidirectional_dynamic_rnn(fw_cell,bw_cell,inputs,sequence_length=masks,dtype=tf.float32,initial_state_fw=encoder_state_input[0],initial_state_bw=encoder_state_input[1])
             if model_type=="gru":
-                concatted_final_state=tf.concat(1,final_state)
+                concat_final_state=tf.concat(1,final_state)
                 concat_outputs=tf.concat(2,outputs)
             else:
                 print ("WRONG MODEL TYPE")
@@ -283,8 +283,8 @@ class QASystem(object):
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
 
         ctx_states, final_ctx_state,_,_ = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
-                                                                             encoder_state_input=(None,None), #ctx_input
-                                                                             attention_inputs=ctx_att_input, #question_states
+                                                                             encoder_state_input=ctx_input,
+                                                                             attention_inputs=ctx_att_input,
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
         # decoder takes encoded representation to probability dists over start / end index
         self.start_probs, self.end_probs = self.decoder.decode(final_ctx_state)
@@ -576,7 +576,7 @@ class QASystem(object):
 
         if self.flags.debug:
             train_dataset = train_dataset[:self.flags.batch_size]
-            num_epochs = 100
+            num_epochs = 20
 
         for epoch in range(num_epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
