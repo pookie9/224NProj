@@ -14,7 +14,7 @@ from util import Progbar, minibatches
 
 from evaluate import exact_match_score, f1_score
 
-#from IPython import embed
+from IPython import embed
 
 logging.basicConfig(level=logging.INFO)
 
@@ -73,14 +73,12 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
             # scores is shape (batch_size, N, 1)
             scores = tf.reduce_sum(self.attn_states * ht, reduction_indices=2, keep_dims=True)
 
-            #Normalizing
-            scores = tf.exp(scores - tf.reduce_max(scores, reduction_indices=0, keep_dims=True))
-            scores = scores / (1e-6 + tf.reduce_sum(scores, reduction_indices=0, keep_dims=True))
-            
             # compute context vector using linear combination of attention states with
             # weights given by attention vector.
             # context is shape (batch_size, hid_dim)
-            
+
+            scores = tf.exp(scores-tf.reduce_max(scores,reduction_indices=0,keep_dims=True))
+            scores = scores/(1e-6 +tf.reduce_sum(scores,reduction_indices=0,keep_dims=True))
             context = tf.reduce_sum(self.attn_states * scores, reduction_indices=1)
 
             with tf.variable_scope("AttnConcat"):
@@ -144,8 +142,8 @@ class Encoder(object):
                 # use an attention cell - each cell uses attention to compute context
                 # over the @attention_inputs
                 if model_type == "gru":
-                    fw_cell = GRUAttnCell(self.size, attention_inputs[0],scope="ctx")
-                    bw_cell = GRUAttnCell(self.size, attention_inputs[1],scope="ctx")
+                    fw_cell = GRUAttnCell(self.size, attention_inputs[0])
+                    bw_cell = GRUAttnCell(self.size, attention_inputs[1])
                 elif model_type == "lstm":
                     fw_cell = LSTMAttnCell(self.size, attention_inputs[0])
                     bw_cell = LSTMAttnCell(self.size, attention_inputs[1])
@@ -288,8 +286,8 @@ class QASystem(object):
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
 
         ctx_states, final_ctx_state,_,_ = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
-                                                                             encoder_state_input=ctx_input
-                                                                             attention_inputs=ctx_att_input, #question_states
+                                                                             encoder_state_input=ctx_input,
+                                                                             attention_inputs=ctx_att_input,
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
         # decoder takes encoded representation to probability dists over start / end index
         self.start_probs, self.end_probs = self.decoder.decode(final_ctx_state)
@@ -581,7 +579,7 @@ class QASystem(object):
 
         if self.flags.debug:
             train_dataset = train_dataset[:self.flags.batch_size]
-            num_epochs = 100
+            num_epochs = 200
 
         for epoch in range(num_epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
