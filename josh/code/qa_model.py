@@ -435,7 +435,7 @@ class QASystem(object):
 
         return self.test(sess, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch)
 
-    def evaluate_answer(self, session, dataset, context, sample=100, log=False):
+    def evaluate_answer(self, session, dataset, context, sample=100, log=False,name=None):
         """
         Evaluate the model's performance using the harmonic mean of F1 and Exact Match (EM)
         with the set of true answer labels
@@ -486,7 +486,7 @@ class QASystem(object):
             # print (" ")
 
         if log:
-            logging.info("F1: {}, EM: {}, for {} samples".format(np.mean(f1), None , sample))
+            logging.info(name+"F1: {}, EM: {}, for {} samples".format(np.mean(f1), None , sample))
         f1=sum(f1)/len(f1)
         em=sum(em)/len(em)
         return f1, em
@@ -506,8 +506,8 @@ class QASystem(object):
             prog_val.update(i + 1, [("val loss", val_loss)])
             # prog_val.update(i + 1, [("val f1", val_f1)])
             # prog_val.update(i + 1, [("val em", val_em)])
-        val_f1, val_em = self.evaluate_answer(sess,train_examples, context=context, sample=100, log=True)#CHANGE HERE
-        print ("TRAIN F1",val_f1)
+        train_f1, train_em = self.evaluate_answer(sess,train_examples, context=context[0], sample=100, log=True,name="TRAIN")#CHANGE HERE
+        val_f1, val_em = self.evaluate_answer(sess,dev_set, context=context[1], sample=100, log=True,name="VAL")#CHANGE HERE
         #print("validation F1 : {}".format(np.mean(val_f1)))
 
 
@@ -583,7 +583,7 @@ class QASystem(object):
 
         for epoch in range(num_epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
-            self.run_epoch(sess=session, train_examples=train_dataset, dev_set=val_dataset, context = train_context)
+            self.run_epoch(sess=session, train_examples=train_dataset, dev_set=val_dataset, context = (train_context,dev_context))
             logging.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
 
