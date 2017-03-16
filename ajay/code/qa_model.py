@@ -37,6 +37,7 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
         -scope: lol who knows
     """
     def __init__(self, num_units, encoder_output, scope=None):
+        # attn_states is shape (batch_size, N, hid_dim)
         self.attn_states = encoder_output
         super(GRUAttnCell, self).__init__(num_units)
 
@@ -58,11 +59,12 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
                 ht = tf.expand_dims(ht, axis=1)
 
             # scores is shape (batch_size, N, 1)
+            #embed()
             scores = tf.reduce_sum(self.attn_states * ht, reduction_indices=2, keep_dims=True)
 
             # do a softmax over the scores
-            scores = tf.exp(scores - tf.reduce_max(scores, reduction_indices=0, keep_dims=True))
-            scores = scores / (1e-6 + tf.reduce_sum(scores, reduction_indices=0, keep_dims=True))
+            scores = tf.exp(scores - tf.reduce_max(scores, reduction_indices=1, keep_dims=True))
+            scores = scores / (1e-6 + tf.reduce_sum(scores, reduction_indices=1, keep_dims=True))
 
             # compute context vector using linear combination of attention states with
             # weights given by attention vector.
@@ -93,6 +95,7 @@ class LSTMAttnCell(tf.nn.rnn_cell.BasicLSTMCell):
         -scope: lol who knows
     """
     def __init__(self, num_units, encoder_output, scope=None):
+        # attn_states is shape (batch_size, N, hid_dim)
         self.attn_states = encoder_output
         super(LSTMAttnCell, self).__init__(num_units)
 
@@ -114,11 +117,12 @@ class LSTMAttnCell(tf.nn.rnn_cell.BasicLSTMCell):
                 ht = tf.expand_dims(ht, axis=1)
 
             # scores is shape (batch_size, N, 1)
+            #embed()
             scores = tf.reduce_sum(self.attn_states * ht, reduction_indices=2, keep_dims=True)
 
             # do a softmax over the scores
-            scores = tf.exp(scores - tf.reduce_max(scores, reduction_indices=0, keep_dims=True))
-            scores = scores / (1e-6 + tf.reduce_sum(scores, reduction_indices=0, keep_dims=True))
+            scores = tf.exp(scores - tf.reduce_max(scores, reduction_indices=1, keep_dims=True))
+            scores = scores / (1e-6 + tf.reduce_sum(scores, reduction_indices=1, keep_dims=True))
 
             # compute context vector using linear combination of attention states with
             # weights given by attention vector.
