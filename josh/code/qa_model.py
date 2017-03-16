@@ -42,8 +42,6 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
         super(GRUAttnCell, self).__init__(num_units)
 
     def __call__(self, inputs, state, scope=None):
-        print ("SCOPE",scope)
-        print ("NAME",type(self).__name__)
         gru_out, gru_state = super(GRUAttnCell, self).__call__(inputs, state, scope)
         with tf.variable_scope(scope or type(self).__name__):
             # compute scores using hs.T * W * ht
@@ -134,7 +132,7 @@ class Decoder(object):
     def __init__(self, output_size):
         self.output_size = output_size
 
-    def decode(self, inputs,masks,initial_state, model_type="gru"):
+    def decode(self, inputs,masks,initial_state=None, model_type="gru"):
         """
         takes in a knowledge representation
         and output a probability estimation over
@@ -148,7 +146,11 @@ class Decoder(object):
         """
 
         if model_type == "gru":
-            cell = tf.nn.rnn_cell.GRUCell(self.output_size)#Size is 1 because it is just ouputting one probability per word
+            with tf.variable_scope("Start"):
+                start_cell = tf.nn.rnn_cell.GRUCell(self.output_size)#Size is 1 because it is just ouputting one probability per word
+            with tf.variable_scope("End"):
+                end_cell = tf.nn.rnn_cell.GRUCell(self.output_size)#Size is 1 because it is just ouputting one probability per word
+                
         elif model_type == "lstm":
             # take 2nd part of state params, since that corresponds to hidden state h
             #knowledge_rep = knowledge_rep[-1]
@@ -157,11 +159,23 @@ class Decoder(object):
         else:
             raise Exception('Must specify model type.')
         with tf.variable_scope("Start"):
-            _, start_probs = tf.nn.dynamic_rnn(cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=None)
+            _, start_probs = tf.nn.dynamic_rnn(start_cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=initial_state)
         with tf.variable_scope("End"):
-            _,end_probs = tf.nn.dynamic_rnn(cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=None)
+            _,end_probs = tf.nn.dynamic_rnn(end_cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=initial_state)
+            
         #normalize start/end probs?
-        return start_probs, end_probs
+        if model_type=="gru":            
+           pass
+        else:
+            start_probs,end_probs=(start_probs[-1],end_probs[-1])
+
+        #make the padded parts of the probs -infinity.....
+        print ("MASKS",masks)
+        masks=-100*(1-tf.sequence_mask(masks,self.output_size,dtype=tf.float32))
+        start_probs+=masks
+        end_probs+=masks
+        return start_probs,end_probs
+        
 
 class QASystem(object):
     def __init__(self, encoder, decoder, pretrained_embeddings, max_ctx_len, max_q_len, flags):
@@ -197,8 +211,8 @@ class QASystem(object):
         # ==== set up training/updating procedure ====
         self.global_step = tf.Variable(0, trainable=False)
         self.starter_learning_rate = self.flags.learning_rate
-        self.learning_rate = tf.train.exponential_decay(self.starter_learning_rate, self.global_step,
-                                           100000, 0.96, staircase=True)
+        #self.learning_rate = tf.train.exponential_decay(self.starter_learning_rate, self.global_step,100000, 0.96, staircase=True)
+        self.learning_rate=self.starter_learning_rate
         self.optimizer = get_optimizer("adam")
         #Doing gradient clipping
         self.optimizer=self.optimizer(self.learning_rate)
@@ -235,9 +249,6 @@ class QASystem(object):
             ht = tf.expand_dims(ht, axis=1)
 
         # scores is shape (batch_size, N, 1), Summing over hidden dimension
-        print ("CONTEXT",context_states)
-        print ("QUESTION",question_rep)
-        print ("HT",ht)
         scores = tf.reduce_sum(context_states * ht, reduction_indices=2, keep_dims=True)
         #now (batch_size x N x 1)
         scores = tf.exp(scores-tf.reduce_max(scores,reduction_indices=1,keep_dims=True))#Doing softmax for normalization
@@ -265,18 +276,14 @@ class QASystem(object):
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
 
         ctx_states, final_ctx_state = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
-                                                                             encoder_state_input=final_question_state,
-                                                                             attention_inputs=question_states, 
+                                                                             encoder_state_input=None,#final_question_state,
+                                                                             attention_inputs=None,#question_states, 
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
         # decoder takes encoded representation to probability dists over start / end index
         attention=self.calc_attention(final_question_state,ctx_states)
         attention=tf.expand_dims(attention,axis=2)
-        print ("ATTENTION",attention)
-
-        print ("CTX",ctx_states)
         weighted_ctx_states=ctx_states*attention
-        print ("WEIGHTED CTX",weighted_ctx_states)
-        self.start_probs, self.end_probs = self.decoder.decode(ctx_states,self.mask_ctx_placeholder,final_question_state)
+        self.start_probs, self.end_probs = self.decoder.decode(weighted_ctx_states,self.mask_ctx_placeholder,initial_state=None)
 
         # TODO: put predictions here?
 
@@ -451,15 +458,8 @@ class QASystem(object):
         for i in range(len(sampled[0])):
             pred_words=' '.join(context[i][a_s[i]:a_e[i]+1])
             actual_words=' '.join(context[i][sampled[2][i][0]:sampled[2][i][1]+1])
-            # print('I:',i)
-            # print ("INDICES",a_s[i],a_e[i])
-            # print ("PRED_WORDS:",pred_words)
-            # print ("ACTUAL WORD",actual_words)
             f1.append(f1_score(pred_words,actual_words))
-            # print('F1:',f1)
             em.append(exact_match_score(pred_words,actual_words))
-            # print('EM:',em)
-            # print (" ")
 
         if log:
             logging.info("{},F1: {}, EM: {}, for {} samples".format(eval_set,np.mean(f1), None , sample))
