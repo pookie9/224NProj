@@ -37,6 +37,7 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
         -scope: lol who knows
     """
     def __init__(self, num_units, encoder_output, scope=None):
+        #(batch_size,N,hid_dim) size
         self.attn_states = encoder_output
         super(GRUAttnCell, self).__init__(num_units)
 
@@ -51,11 +52,12 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
                 
                 ht = tf.expand_dims(ht, axis=1)
 
-            # scores is shape (batch_size, N, 1)
+            # scores is shape (batch_size, N, 1), Summing over hidden dimension
             scores = tf.reduce_sum(self.attn_states * ht, reduction_indices=2, keep_dims=True)
-            scores = tf.exp(scores-tf.reduce_max(scores,reduction_indices=0,keep_dims=True))#Doing softmax for normalization
-            scores = scores/(1e-6 +tf.reduce_sum(scores,reduction_indices=0,keep_dims=True))
+            #now (batch_size x N x 1)
+            scores = tf.exp(scores-tf.reduce_max(scores,reduction_indices=1,keep_dims=True))#Doing softmax for normalization
             
+            scores = scores/(1e-6 +tf.reduce_sum(scores,reduction_indices=1,keep_dims=True))
             context = tf.reduce_sum(self.attn_states * scores, reduction_indices=1)
 
             with tf.variable_scope("AttnConcat"):
@@ -146,7 +148,7 @@ class Decoder(object):
         """
 
         if model_type == "gru":
-            cell = tf.nn.rnn_cell.GRUCell(1)#Size is 1 because it is just ouputting one probability per word
+            cell = tf.nn.rnn_cell.GRUCell(self.output_size)#Size is 1 because it is just ouputting one probability per word
         elif model_type == "lstm":
             # take 2nd part of state params, since that corresponds to hidden state h
             #knowledge_rep = knowledge_rep[-1]
@@ -154,19 +156,11 @@ class Decoder(object):
 
         else:
             raise Exception('Must specify model type.')
-        print ("CELL",cell)
-        print ("OUTPUT_SIZE",self.output_size)
-        print ("INPUTS",inputs)
-        print ("MASKS",masks)
-        print ("INITIAL",initial_state)
         with tf.variable_scope("Start"):
-            start_probs, _ = tf.nn.dynamic_rnn(cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=None)
+            _, start_probs = tf.nn.dynamic_rnn(cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=None)
         with tf.variable_scope("End"):
-            end_probs, _ = tf.nn.dynamic_rnn(cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=None)
-        start_probs=tf.squeeze(start_probs)
-        end_probs=tf.squeeze(end_probs)
-        #normalize start_probs and end_probs
-        print ("START_PROBS",start_probs)
+            _,end_probs = tf.nn.dynamic_rnn(cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=None)
+        #normalize start/end probs?
         return start_probs, end_probs
 
 class QASystem(object):
@@ -214,7 +208,7 @@ class QASystem(object):
             if grad is None:
                 capped_gvs.append((grad,var))#Sometimes None is the gradient, often if rnn is initialized with None
             else:
-                capped_gvs.append((tf.clip_by_value(grad,-self.flags.max_gradient_norm, self.flags.max_gradient_norm),var))
+                capped_gvs.append((tf.clip_by_norm(grad,self.flags.max_gradient_norm),var))
         self.train_op=self.optimizer.apply_gradients(capped_gvs)#NOTE: I don't specify to minimize anywhere...Not sure if I should...
         #self.train_op = self.optimizer(self.learning_rate).minimize(self.loss) #No gradient clipping
 
@@ -233,17 +227,27 @@ class QASystem(object):
     def calc_attention(self,question_rep,context_states):
         #question_rep is equivalent to encoder_output/self.attn_states in GRUAttnCell
         #context_states is equivalent to
-        question_rep=tf.expand_dims(question_rep,axis=1)
-        #context_states=tf.transpose(context_states,perm=[1,0,2])
-        print ("CONTEXTBEFORE MUL",context_states)
+        #output_size=number of words in context
+
+        with tf.variable_scope("Attn"):
+            ht = tf.nn.rnn_cell._linear(question_rep, self.flags.state_size, True, 1.0)
+            
+            ht = tf.expand_dims(ht, axis=1)
+
+        # scores is shape (batch_size, N, 1), Summing over hidden dimension
+        print ("CONTEXT",context_states)
         print ("QUESTION",question_rep)
-        attention=tf.matmul(question_rep,context_states)
-        print("ATTENTION BEFORE RESHAPE",attention)
-        attention=tf.transpose(attention,perm=(2,0,1))
-        print ("ATTENTION HERE",attention)
-        attention = tf.exp(attention-tf.reduce_max(attention,reduction_indices=0,keep_dims=True))#Doing softmax for normalization
-        attention = attention/(1e-6 +tf.reduce_sum(attention,reduction_indices=0,keep_dims=True))
-        return attention
+        print ("HT",ht)
+        scores = tf.reduce_sum(context_states * ht, reduction_indices=2, keep_dims=True)
+        #now (batch_size x N x 1)
+        scores = tf.exp(scores-tf.reduce_max(scores,reduction_indices=1,keep_dims=True))#Doing softmax for normalization
+        
+        scores = scores/(1e-6 +tf.reduce_sum(scores,reduction_indices=1,keep_dims=True))
+        context = tf.reduce_sum(context_states * scores, reduction_indices=1)
+
+        with tf.variable_scope("AttnConcat"):            
+            out=tf.nn.relu(tf.nn.rnn_cell._linear(context,self.flags.output_size,True,1.0))
+        return out
 
     def setup_system(self):
         """
@@ -266,13 +270,13 @@ class QASystem(object):
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
         # decoder takes encoded representation to probability dists over start / end index
         attention=self.calc_attention(final_question_state,ctx_states)
-        attention=tf.tile(attention,[1,1,50])
+        attention=tf.expand_dims(attention,axis=2)
         print ("ATTENTION",attention)
-        
-        weighted_ctx_states=tf.multiply(attention,ctx_states)
-        print ("WEIGHTED CTX",weighted_ctx_states)
+
         print ("CTX",ctx_states)
-        self.start_probs, self.end_probs = self.decoder.decode(weighted_ctx_states,self.mask_ctx_placeholder,final_question_state)
+        weighted_ctx_states=ctx_states*attention
+        print ("WEIGHTED CTX",weighted_ctx_states)
+        self.start_probs, self.end_probs = self.decoder.decode(ctx_states,self.mask_ctx_placeholder,final_question_state)
 
         # TODO: put predictions here?
 
