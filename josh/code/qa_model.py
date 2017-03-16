@@ -53,8 +53,7 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
             # scores is shape (batch_size, N, 1), Summing over hidden dimension
             scores = tf.reduce_sum(self.attn_states * ht, reduction_indices=2, keep_dims=True)
             #now (batch_size x N x 1)
-            scores = tf.exp(scores-tf.reduce_max(scores,reduction_indices=1,keep_dims=True))#Doing softmax for normalization
-            
+            scores = tf.exp(scores-tf.reduce_max(scores,reduction_indices=1,keep_dims=True))#Doing softmax for normalization            
             scores = scores/(1e-6 +tf.reduce_sum(scores,reduction_indices=1,keep_dims=True))
             context = tf.reduce_sum(self.attn_states * scores, reduction_indices=1)
 
@@ -146,9 +145,9 @@ class Decoder(object):
         """
 
         if model_type == "gru":
-            with tf.variable_scope("Start"):
+            with tf.variable_scope("Decoder_Start_Cell"):
                 start_cell = tf.nn.rnn_cell.GRUCell(self.output_size)#Size is 1 because it is just ouputting one probability per word
-            with tf.variable_scope("End"):
+            with tf.variable_scope("Decoder_End_Cell"):
                 end_cell = tf.nn.rnn_cell.GRUCell(self.output_size)#Size is 1 because it is just ouputting one probability per word
                 
         elif model_type == "lstm":
@@ -158,9 +157,9 @@ class Decoder(object):
 
         else:
             raise Exception('Must specify model type.')
-        with tf.variable_scope("Start"):
+        with tf.variable_scope("Decoder_Start"):
             _, start_probs = tf.nn.dynamic_rnn(start_cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=initial_state)
-        with tf.variable_scope("End"):
+        with tf.variable_scope("Decoer_End"):
             _,end_probs = tf.nn.dynamic_rnn(end_cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=initial_state)
             
         #normalize start/end probs?
@@ -171,7 +170,7 @@ class Decoder(object):
 
         #make the padded parts of the probs -infinity.....
         print ("MASKS",masks)
-        masks=-100*(1-tf.sequence_mask(masks,self.output_size,dtype=tf.float32))
+        masks=tf.constant(-100.0)*(tf.constant(1.0)-tf.sequence_mask(masks,self.output_size,dtype=tf.float32))
         start_probs+=masks
         end_probs+=masks
         return start_probs,end_probs
@@ -238,12 +237,12 @@ class QASystem(object):
             padded_sequence.append(sentence)
         return (padded_sequence, mask)
 
-    def calc_attention(self,question_rep,context_states):
+    def mixer(self,question_rep,context_states):
         #question_rep is equivalent to encoder_output/self.attn_states in GRUAttnCell
         #context_states is equivalent to
         #output_size=number of words in context
 
-        with tf.variable_scope("Attn"):
+        with tf.variable_scope("mixer"):
             ht = tf.nn.rnn_cell._linear(question_rep, self.flags.state_size, True, 1.0)
             
             ht = tf.expand_dims(ht, axis=1)
@@ -254,11 +253,12 @@ class QASystem(object):
         scores = tf.exp(scores-tf.reduce_max(scores,reduction_indices=1,keep_dims=True))#Doing softmax for normalization
         
         scores = scores/(1e-6 +tf.reduce_sum(scores,reduction_indices=1,keep_dims=True))
-        context = tf.reduce_sum(context_states * scores, reduction_indices=1)
+        #context = tf.reduce_sum(context_states * scores, reduction_indices=1)
+        return context_states*scores
 
-        with tf.variable_scope("AttnConcat"):            
-            out=tf.nn.relu(tf.nn.rnn_cell._linear(context,self.flags.output_size,True,1.0))
-        return out
+        #with tf.variable_scope("mixer_relu"):            
+            #out=tf.nn.relu(tf.nn.rnn_cell._linear(context,self.flags.output_size,True,1.0))
+        #return out
 
     def setup_system(self):
         """
@@ -280,9 +280,7 @@ class QASystem(object):
                                                                              attention_inputs=None,#question_states, 
                                                                              model_type=self.flags.model_type,dropout=self.flags.dropout)
         # decoder takes encoded representation to probability dists over start / end index
-        attention=self.calc_attention(final_question_state,ctx_states)
-        attention=tf.expand_dims(attention,axis=2)
-        weighted_ctx_states=ctx_states*attention
+        weighted_ctx_states=self.mixer(final_question_state,ctx_states)
         self.start_probs, self.end_probs = self.decoder.decode(weighted_ctx_states,self.mask_ctx_placeholder,initial_state=None)
 
         # TODO: put predictions here?
@@ -305,7 +303,7 @@ class QASystem(object):
         :return:
         """
         with vs.variable_scope("embeddings"):
-            embeddings = tf.Variable(self.pretrained_embeddings, name='embedding', dtype=tf.float32) #only learn one common embedding
+            embeddings=tf.Variable(self.pretrained_embeddings, name='embedding', trainable=False,dtype=tf.float32) #only learn one common embedding
 
             question_embeddings = tf.nn.embedding_lookup(embeddings, self.question_placeholder)
             self.question_embeddings = tf.reshape(question_embeddings, [-1, self.max_q_len, self.embed_size])
