@@ -11,6 +11,12 @@ from qa_model import Encoder, QASystem, Decoder
 from os.path import join as pjoin
 import numpy as np
 
+# TODO: output size 600
+
+# TO ASK:
+
+    # How to do LSTM in decoder?
+
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -18,10 +24,10 @@ logging.basicConfig(level=logging.INFO)
 tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
-tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
+tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 100, "Size of each model layer.")
-tf.app.flags.DEFINE_integer("output_size", 766, "The output size of your model.")
+tf.app.flags.DEFINE_integer("output_size", 766, "The output size of your model.") #766 #600
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
@@ -35,8 +41,8 @@ tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embeddin
 
 # added
 tf.app.flags.DEFINE_string("model_type", "gru", "specify either gru or lstm cell type for encoding")
-tf.app.flags.DEFINE_integer("debug", 1, "whether to set debug or not")
-tf.app.flags.DEFINE_integer("grad_clip", 0, "whether to clip gradients or not")
+tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
+tf.app.flags.DEFINE_integer("grad_clip", 1, "whether to clip gradients or not")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -134,6 +140,15 @@ def main(_):
     val_answer_spans = initialize_data(val_answer_span_path)
     val_context = initialize_data(val_context_path, keep_as_string=True)
 
+    # truncate paragraphs to output_size
+    paragraph_lengths = []
+    for i in range(0, len(context_ids)):
+        context_ids[i] = context_ids[i][:FLAGS.output_size]
+        paragraph_lengths.append(len(context_ids[i]))
+    for j in range(0, len(val_context_ids)):
+        val_context_ids[j] = val_context_ids[j][:FLAGS.output_size]
+        paragraph_lengths.append(len(val_context_ids[j]))
+
     train_dataset = [context_ids,question_ids,answer_spans]
     val_dataset = [val_context_ids,val_question_ids,val_answer_spans]
     contexts = [context,val_context]
@@ -150,11 +165,11 @@ def main(_):
 
     print("Using model type : {}".format(FLAGS.model_type))
 
-    question_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, name="question_encoder")
-    context_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, name="context_encoder")
-    decoder = Decoder(output_size=FLAGS.output_size)
+    question_encoder = Encoder(size=FLAGS.state_size, name="question_encoder")
+    context_encoder = Encoder(size=FLAGS.state_size, name="context_encoder")
+    decoder = Decoder(hidden_size=FLAGS.state_size, output_size=FLAGS.output_size)
 
-    qa = QASystem(encoder=(question_encoder,context_encoder), 
+    qa = QASystem(encoder=(question_encoder, context_encoder), 
                   decoder=decoder, 
                   pretrained_embeddings=embeddings,
                   max_ctx_len=max_ctx_len,
