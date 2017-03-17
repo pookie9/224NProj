@@ -152,12 +152,13 @@ class Encoder(object):
             #cell=DropoutCell(cell,1.0-dropout)
             #outputs, final_state = tf.nn.dynamic_rnn(cell, inputs,sequence_length=masks,dtype=tf.float32,initial_state=encoder_state_input)
             outputs, final_state = tf.nn.bidirectional_dynamic_rnn(fw_cell,bw_cell,inputs,sequence_length=masks,dtype=tf.float32,initial_state_fw=encoder_state_input[0],initial_state_bw=encoder_state_input[1])
+            
             if model_type=="gru":
                 concat_final_state=tf.concat(1,final_state)
                 concat_outputs=tf.concat(2,outputs)
             else:
-                print ("WRONG MODEL TYPE")
-                exit(1)
+                raise Exception('Must specify model type.')
+
         return concat_outputs,concat_final_state,outputs,final_state
 
 

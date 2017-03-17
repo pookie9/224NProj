@@ -83,7 +83,7 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
 
                 # out = tf.nn.tanh(tf.matmul(concat_vec, W_c) + b_c)
 
-                out = tf.nn.relu(tf.nn.rnn_cell._linear([context, gru_out], self._num_units, True, 1.0))
+                out = tf.nn.tanh(tf.nn.rnn_cell._linear([context, gru_out], self._num_units, True, 1.0))
 
             return (out, out)
 
@@ -141,7 +141,7 @@ class LSTMAttnCell(tf.nn.rnn_cell.BasicLSTMCell):
 
                 # out = tf.nn.tanh(tf.matmul(concat_vec, W_c) + b_c)
 
-                out = tf.nn.relu(tf.nn.rnn_cell._linear([context, lstm_out], self._num_units, True, 1.0))
+                out = tf.nn.tanh(tf.nn.rnn_cell._linear([context, lstm_out], self._num_units, True, 1.0))
 
             return (out, lstm_state)
 
@@ -157,7 +157,7 @@ class Encoder(object):
         self.vocab_dim = vocab_dim
         self.name = name
 
-    def encode(self, inputs, masks, encoder_state_input=None, attention_inputs=None, model_type="gru"):
+    def encode(self, inputs, masks, encoder_state_input=(None, None), attention_inputs=(None, None), model_type="gru"):
         """
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
@@ -177,28 +177,45 @@ class Encoder(object):
         with tf.variable_scope(self.name):
 
             # Define the correct cell type.
-            if attention_inputs is None:
+            if attention_inputs[0] is None:
                 if model_type == "gru":
-                    cell = tf.nn.rnn_cell.GRUCell(self.size)
+                    fw_cell = tf.nn.rnn_cell.GRUCell(self.size)
+                    bw_cell = tf.nn.rnn_cell.GRUCell(self.size)
                 elif model_type == "lstm":
-                    cell = tf.nn.rnn_cell.BasicLSTMCell(self.size)
+                    fw_cell = tf.nn.rnn_cell.BasicLSTMCell(self.size)
+                    bw_cell = tf.nn.rnn_cell.BasicLSTMCell(self.size)
                 else:
                     raise Exception('Must specify model type.')
             else:
                 # use an attention cell - each cell uses attention to compute context
                 # over the @attention_inputs
                 if model_type == "gru":
-                    cell = GRUAttnCell(self.size, attention_inputs)
+                    fw_cell = GRUAttnCell(self.size, attention_inputs[0])
+                    bw_cell = GRUAttnCell(self.size, attention_inputs[1])
                 elif model_type == "lstm":
-                    cell = LSTMAttnCell(self.size, attention_inputs)
+                    fw_cell = LSTMAttnCell(self.size, attention_inputs[0])
+                    bw_cell = LSTMAttnCell(self.size, attention_inputs[1])
                 else:
                     raise Exception('Must specify model type.')                
 
-            outputs, final_state = tf.nn.dynamic_rnn(cell, inputs, 
-                                           sequence_length=masks, 
-                                           dtype=tf.float32,
-                                           initial_state=encoder_state_input)
-        return outputs, final_state
+            outputs, final_state = tf.nn.bidirectional_dynamic_rnn(fw_cell, bw_cell, inputs, 
+                                                                   sequence_length=masks, 
+                                                                   dtype=tf.float32, 
+                                                                   initial_state_fw=encoder_state_input[0], 
+                                                                   initial_state_bw=encoder_state_input[1])
+            
+            if model_type == "gru":
+                concat_final_state = tf.concat(1, final_state)
+                concat_outputs = tf.concat(2, outputs)
+            elif model_type == "lstm":
+                concat_final_state = tf.concat(1, final_state)
+                concat_outputs = tf.concat(2, outputs)
+            else:
+                raise Exception('Must specify model type.')
+
+        return concat_outputs, concat_final_state, outputs, final_state
+
+
 
         # cell_fw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
         # cell_bw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
@@ -216,7 +233,7 @@ class Decoder(object):
     def __init__(self, output_size):
         self.output_size = output_size
 
-    def decode(self, knowledge_rep, model_type="gru"):
+    def decode(self, knowledge_rep, masks, maxlen, model_type="gru"):
         """
         takes in a knowledge representation
         and output a probability estimation over
@@ -241,11 +258,20 @@ class Decoder(object):
         else:
             raise Exception('Must specify model type.')
 
+        # TODO: Do masking. 
+
+        # bool_masks = tf.cast(tf.sequence_mask(masks, maxlen=maxlen), tf.float32)
+        # a = tf.constant(-1000000.0)
+        # b = tf.constant(1.0)
+
+
         with vs.variable_scope("answer_start"):
             start_probs = tf.nn.rnn_cell._linear([question_enc, paragraph_enc], self.output_size, True, 1.0)
+            #start_probs = start_probs + (a * (b - bool_masks))
 
         with vs.variable_scope("answer_end"):
             end_probs = tf.nn.rnn_cell._linear([question_enc, paragraph_enc], self.output_size, True, 1.0)
+            #end_probs = end_probs + (a * (b - bool_masks))
 
         # input_size = knowledge_rep.get_shape()[-1]
         # W_start = tf.get_variable("W_start", shape=(input_size, self.output_size),
@@ -337,17 +363,19 @@ class QASystem(object):
         """
 
         # simple encoder stuff here
-        question_states, final_question_state = self.question_encoder.encode(self.question_embeddings, self.mask_q_placeholder, 
-                                                                             encoder_state_input=None, 
-                                                                             attention_inputs=None, 
+        question_states, final_question_state, ctx_att_input, ctx_input = self.question_encoder.encode(self.question_embeddings, self.mask_q_placeholder, 
+                                                                             encoder_state_input=(None, None), 
+                                                                             attention_inputs=(None, None), 
                                                                              model_type=self.flags.model_type)
-        ctx_states, final_ctx_state = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
-                                                                             encoder_state_input=None, #final_question_state, 
-                                                                             attention_inputs=question_states,
+        ctx_states, final_ctx_state, _, _ = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
+                                                                             encoder_state_input=(None, None), #final_question_state, 
+                                                                             attention_inputs=ctx_att_input,#(None, None),#question_states,
                                                                              model_type=self.flags.model_type)
 
         # decoder takes encoded representation to probability dists over start / end index
         self.start_probs, self.end_probs = self.decoder.decode(knowledge_rep=(final_question_state, final_ctx_state), 
+                                                               masks=self.mask_ctx_placeholder,
+                                                               maxlen=self.max_ctx_len,
                                                                model_type=self.flags.model_type)
 
     def setup_loss(self):
@@ -358,6 +386,7 @@ class QASystem(object):
         with vs.variable_scope("loss"):
             self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs, self.answer_span_placeholder[:, 0])) + \
                         tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs, self.answer_span_placeholder[:, 1]))
+            
             #pass
 
     def setup_embeddings(self):
@@ -366,7 +395,7 @@ class QASystem(object):
         :return:
         """
         with vs.variable_scope("embeddings"):
-            embeddings = tf.Variable(self.pretrained_embeddings, name='embedding', dtype=tf.float32) #only learn one common embedding
+            embeddings = tf.Variable(self.pretrained_embeddings, name='embedding', dtype=tf.float32, trainable=False) #only learn one common embedding
 
             question_embeddings = tf.nn.embedding_lookup(embeddings, self.question_placeholder)
             self.question_embeddings = tf.reshape(question_embeddings, [-1, self.max_q_len, self.embed_size])
