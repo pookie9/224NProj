@@ -62,7 +62,7 @@ class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
                 concat_vec = tf.concat(1, [context, gru_out])
                 out=tf.nn.relu(tf.nn.rnn_cell._linear(concat_vec,self._num_units,True,1.0))
 
-            return (out, out)
+            return (out, gru_state)
 
 class LSTMAttnCell(tf.nn.rnn_cell.BasicLSTMCell):
     def __init__(self, num_units, encoder_output, scope=None):

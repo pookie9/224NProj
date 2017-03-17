@@ -7,21 +7,23 @@ import json
 
 import tensorflow as tf
 
-from qa_model import Encoder, QASystem, Decoder
+from baseline2 import Encoder, QASystem, Decoder
 from os.path import join as pjoin
 import numpy as np
 
 import logging
 
+from IPython import embed
+
 logging.basicConfig(level=logging.INFO)
 
-tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")#initially .01
-tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
+tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")
+tf.app.flags.DEFINE_float("max_gradient_norm", 8, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
-tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
-tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
-tf.app.flags.DEFINE_integer("state_size", 100, "Size of each model layer.")
-tf.app.flags.DEFINE_integer("output_size", 766, "The output size of your model.")
+tf.app.flags.DEFINE_integer("batch_size", 20, "Batch size to use during training.")
+tf.app.flags.DEFINE_integer("epochs", 12, "Number of epochs to train.")
+tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
+tf.app.flags.DEFINE_integer("output_size", 300, "The output size of your model.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
@@ -29,17 +31,16 @@ tf.app.flags.DEFINE_string("load_train_dir", "", "Training directory to load mod
 tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (default: ./log)")
 tf.app.flags.DEFINE_string("optimizer", "adam", "adam / sgd")
 tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per print.")
-tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
+tf.app.flags.DEFINE_integer("keep", 0, "How many checkout)points to keep, 0 indicates keep all.")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 
 # added
 tf.app.flags.DEFINE_string("model_type", "gru", "specify either gru or lstm cell type for encoding")
 tf.app.flags.DEFINE_integer("debug", 1, "whether to set debug or not")
-
+tf.app.flags.DEFINE_integer("grad_clip", 1, "whether to clip gradients or not")
 
 FLAGS = tf.app.flags.FLAGS
-
 
 def initialize_model(session, model, train_dir):
     ckpt = tf.train.get_checkpoint_state(train_dir)
@@ -134,6 +135,25 @@ def main(_):
     val_answer_spans = initialize_data(val_answer_span_path)
     val_context = initialize_data(val_context_path, keep_as_string=True)
 
+    # Reducing context length to the specified max in FLAGS.output_size
+    paragraph_lengths = []
+    for i in range(0,len(context_ids)):
+        paragraph_lengths.append(len(context_ids[i]))
+        context_ids[i] = context_ids[i][:FLAGS.output_size]
+        context[i] = context[i][:FLAGS.output_size]
+        answer_spans[i] = np.clip(answer_spans[i],0,FLAGS.output_size-1)
+    for j in range(0,len(val_context_ids)):
+        paragraph_lengths.append(len(val_context_ids[j]))
+        val_context_ids[j] = val_context_ids[j][:FLAGS.output_size]
+        val_context[j] = val_context[j][:FLAGS.output_size]
+        val_answer_spans[j] = np.clip(val_answer_spans[j],0,FLAGS.output_size-1)
+
+    #print ('Par_mean:',np.mean(paragraph_lengths),'Par_std:',np.std(paragraph_lengths))
+
+    par_mean = np.mean(paragraph_lengths)
+    par_max_len = max(paragraph_lengths)
+    std = np.std(paragraph_lengths)
+
     train_dataset = [context_ids,question_ids,answer_spans]
     val_dataset = [val_context_ids,val_question_ids,val_answer_spans]
     contexts = [context,val_context]
@@ -152,7 +172,7 @@ def main(_):
 
     question_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, name="question_encoder")
     context_encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, name="context_encoder")
-    decoder = Decoder(output_size=FLAGS.output_size)
+    decoder = Decoder(output_size=FLAGS.output_size, name="decoder")
 
     qa = QASystem(encoder=(question_encoder,context_encoder), 
                   decoder=decoder, 
@@ -178,8 +198,6 @@ def main(_):
         saver = tf.train.Saver()
 
         qa.train(sess, saver, dataset, contexts, save_train_dir)
-
-        #qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
 
 if __name__ == "__main__":
     tf.app.run()
