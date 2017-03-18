@@ -415,14 +415,19 @@ class QASystem(object):
             # scores is shape (batch_size, N, 1)
             # scores = tf.reduce_sum(A*q_states, reduction_indices=2, keep_dims=True)
             C_P = batch_matmul(A,q_states)
-            P = tf.concat(1,[C_P,ctx_states])
-            W = tf.get_variable("W_mix", shape=(1,2*output_size,output_size),initializer=tf.contrib.layers.xavier_initializer())
+            P = tf.concat(2,[C_P,ctx_states])
+            W = tf.get_variable("W_mix", shape=(1,2*state_size,state_size),initializer=tf.contrib.layers.xavier_initializer())
             b = tf.get_variable("b_mix", shape=(1,output_size,state_size),initializer=tf.contrib.layers.xavier_initializer())
-
+            print ("W_MIX",W)
+            print ("P",P)
+            print ("B",b)
+            
             batch_size = tf.shape(P)[0]
             W_tiled = tf.tile(W,[batch_size,1,1])
-            ctx_state_rep = batch_matmul(tf.transpose(P,perm=[0,2,1]),W_tiled)
-            ctx_state_rep = tf.transpose(ctx_state_rep,perm=[0,2,1]) + b
+            ctx_state_rep=batch_matmul(P,W_tiled)+b
+            
+            #ctx_state_rep = batch_matmul(tf.transpose(P,perm=[0,2,1]),W_tiled)
+            #ctx_state_rep = tf.transpose(ctx_state_rep,perm=[0,2,1]) + b
 
 
         # # do a softmax over the scores
@@ -486,11 +491,11 @@ class QASystem(object):
         #with vs.variable_scope("embeddings"):
         embeddings = tf.Variable(self.pretrained_embeddings, name='embedding', dtype=tf.float32, trainable=False) #only learn one common embedding
 
-        question_embeddings = tf.nn.embedding_lookup(embeddings, self.question_placeholder)
-        self.question_embeddings = tf.reshape(question_embeddings, [-1, self.max_q_len, self.embed_size])
+        self.question_embeddings = tf.nn.embedding_lookup(embeddings, self.question_placeholder)
+        #self.question_embeddings = tf.reshape(question_embeddings, [-1, self.max_q_len, self.embed_size])
 
-        context_embeddings = tf.nn.embedding_lookup(embeddings, self.context_placeholder)
-        self.context_embeddings = tf.reshape(context_embeddings, [-1, self.max_ctx_len, self.embed_size])
+        self.context_embeddings = tf.nn.embedding_lookup(embeddings, self.context_placeholder)
+        #self.context_embeddings = tf.reshape(context_embeddings, [-1, self.max_ctx_len, self.embed_size])
 
 
     def optimize(self, session, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch):
