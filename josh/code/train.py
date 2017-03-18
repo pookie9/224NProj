@@ -4,11 +4,18 @@ from __future__ import print_function
 
 import os
 import json
-import numpy as np
+
 import tensorflow as tf
 
 from qa_model import Encoder, QASystem, Decoder
 from os.path import join as pjoin
+import numpy as np
+
+# TODO: output size 600
+
+# TO ASK:
+
+    # How to do LSTM in decoder?
 
 import logging
 
@@ -17,10 +24,10 @@ logging.basicConfig(level=logging.INFO)
 tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
-tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
+tf.app.flags.DEFINE_integer("batch_size", 10000, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
-tf.app.flags.DEFINE_integer("output_size", 500, "The output size of your model.")
+tf.app.flags.DEFINE_integer("output_size", 600, "The output size of your model.") #766 #600
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
@@ -32,10 +39,15 @@ tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicate
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 
+# added
+tf.app.flags.DEFINE_string("model_type", "lstm", "specify either gru or lstm cell type for encoding")
+tf.app.flags.DEFINE_integer("debug", 1, "whether to set debug or not")
+tf.app.flags.DEFINE_integer("grad_clip", 1, "whether to clip gradients or not")
+tf.app.flags.DEFINE_integer("question_size", 60, "The question size of your model.") # 60
+
+
 FLAGS = tf.app.flags.FLAGS
 
-#Added flags
-tf.app.flags.DEFINE_string("question_size", -1, "The length of the longest question in validate/train")
 
 def initialize_model(session, model, train_dir):
     ckpt = tf.train.get_checkpoint_state(train_dir)
@@ -74,6 +86,7 @@ def initialize_data(data_path,keep_as_string=False):
     else:
         raise ValueError("Vocabulary file %s not found.", vocab_path)
 
+    
 def initialize_embeddings(embed_path):
     if tf.gfile.Exists(embed_path):
         embeddings=np.load(embed_path)
@@ -81,6 +94,7 @@ def initialize_embeddings(embed_path):
     else:
         raise ValueError("Embeddings file %s not found",embed_path)
 
+    
 def get_normalized_train_dir(train_dir):
     """
     Adds symlink to {train_dir} from /tmp/cs224n-squad-train to canonicalize the
@@ -95,6 +109,7 @@ def get_normalized_train_dir(train_dir):
         os.makedirs(train_dir)
     os.symlink(os.path.abspath(train_dir), global_train_dir)
     return global_train_dir
+
 def pad(sequence, max_length):
     # assumes sequence is a list of lists of word, pads to the longest "sentence"
     # returns (padded_sequence, mask)
@@ -107,6 +122,7 @@ def pad(sequence, max_length):
         sentence.extend([PAD_ID] * (max_length - len(sentence)))
         padded_sequence.append(sentence)
     return (padded_sequence, mask)
+
 
 def check_pad(seqs, mask):
     from qa_data import PAD_ID
@@ -121,6 +137,8 @@ def check_pad(seqs, mask):
             if i>=m:
                 assert seq[i]==PAD_ID, "NON-PAD FOUND AFTER END OF MASK (mask, index, ID)"+str(m)+","+str(i)+","+str(seq[i])
         
+
+
 def main(_):
 
     # Do what you need to load datasets from FLAGS.data_dir
@@ -130,7 +148,7 @@ def main(_):
     vocab_path = FLAGS.vocab_path or pjoin(FLAGS.data_dir, "vocab.dat")
     vocab, rev_vocab = initialize_vocab(vocab_path)
 
-    context_ids_path=pjoin(FLAGS.data_dir,"train.ids.context")
+    context_ids_path = pjoin(FLAGS.data_dir,"train.ids.context")
     question_ids_path = pjoin(FLAGS.data_dir, "train.ids.question")
     answer_span_path = pjoin(FLAGS.data_dir, "train.span")
     val_context_ids_path = pjoin(FLAGS.data_dir, "val.ids.context")
@@ -138,7 +156,7 @@ def main(_):
     val_answer_span_path = pjoin(FLAGS.data_dir, "val.span")
     context_path = pjoin(FLAGS.data_dir, "train.context")
     val_context_path = pjoin(FLAGS.data_dir, "val.context")
-    
+
     context_ids = initialize_data(context_ids_path)
     question_ids = initialize_data(question_ids_path)
     answer_spans = initialize_data(answer_span_path)
@@ -148,47 +166,49 @@ def main(_):
     val_answer_spans = initialize_data(val_answer_span_path)
     val_context = initialize_data(val_context_path, keep_as_string=True)
 
-    #Now trimming the lengths of the paragraphs
+    # TODO: check this clipping, especially the answer
+
+    # Reducing context length to the specified max in FLAGS.output_size
     paragraph_lengths = []
+    # question_lengths = []
+    
     for i in range(0,len(context_ids)):
         paragraph_lengths.append(len(context_ids[i]))
         context_ids[i] = context_ids[i][:FLAGS.output_size]
         context[i] = context[i][:FLAGS.output_size]
-        answer_spans[i] = np.clip(answer_spans[i],0,FLAGS.output_size-1)
+        answer_spans[i] = np.clip(answer_spans[i], 0, FLAGS.output_size-1)
+        question_ids[i] = question_ids[i][:FLAGS.question_size]
     for j in range(0,len(val_context_ids)):
         paragraph_lengths.append(len(val_context_ids[j]))
         val_context_ids[j] = val_context_ids[j][:FLAGS.output_size]
         val_context[j] = val_context[j][:FLAGS.output_size]
-        val_answer_spans[j] = np.clip(val_answer_spans[j],0,FLAGS.output_size-1)
-
-    train_dataset=[context_ids,question_ids,answer_spans]
-    val_dataset=[val_context_ids,val_question_ids,val_answer_spans]
+        val_answer_spans[j] = np.clip(val_answer_spans[j], 0, FLAGS.output_size-1)
+        val_question_ids[j] = val_question_ids[j][:FLAGS.question_size]
+    
 
     embeddings=initialize_embeddings(embed_path)
 
     max_ctx_len=max(max(map(len,context_ids)),max(map(len,val_context_ids)))
     max_q_len=max(max(map(len,question_ids)),max(map(len,val_question_ids)))
 
-
-    FLAGS.question_size=max_q_len
     assert max_ctx_len==FLAGS.output_size, "MISMATCH BETWEEN MAX_CTX_LEN AND FLAGS.OUTPUT_SIZE: "+str(max_ctx_len)+", "+str(FLAGS.output_size)
 
-    context_ids,ctx_mask=pad(context_ids,max_ctx_len)
-    question_ids,q_mask=pad(question_ids,max_q_len)
-    val_context_ids,val_ctx_mask=pad(val_context_ids,max_ctx_len)
-    val_question_ids,val_q_mask=pad(val_question_ids,max_q_len)
+    context_ids, ctx_mask = pad(context_ids, FLAGS.output_size)
+    question_ids, q_mask = pad(question_ids, FLAGS.question_size)
+    val_context_ids, val_ctx_mask = pad(val_context_ids, FLAGS.output_size)
+    val_question_ids, val_q_mask = pad(val_question_ids, FLAGS.question_size)
 
-    context_ids=np.array(context_ids)
-    question_ids=np.array(question_ids)
-    answer_spans=np.array(answer_spans)
-    ctx_mask=np.array(ctx_mask)
-    q_mask=np.array(q_mask)
+    context_ids = np.array(context_ids)
+    question_ids = np.array(question_ids)
+    answer_spans = np.array(answer_spans)
+    ctx_mask = np.array(ctx_mask)
+    q_mask = np.array(q_mask)
 
-    val_context_ids=np.array(val_context_ids)
-    val_question_ids=np.array(val_question_ids)
-    val_answer_spans=np.array(val_answer_spans)
-    val_ctx_mask=np.array(val_ctx_mask)
-    val_q_mask=np.array(val_q_mask)
+    val_context_ids = np.array(val_context_ids)
+    val_question_ids = np.array(val_question_ids)
+    val_answer_spans = np.array(val_answer_spans)
+    val_ctx_mask = np.array(val_ctx_mask)
+    val_q_mask = np.array(val_q_mask)
     
     check_pad(context_ids, ctx_mask)
     print("CONTEXT IDS PADDED AND CHECKED")
@@ -204,32 +224,11 @@ def main(_):
     assert len(vocab) == embeddings.shape[0], "Mismatch between embedding shape and vocab length"
     assert embeddings.shape[1] == FLAGS.embedding_size, "Mismatch between embedding shape and FLAGS"
     assert len(context_ids) == len(question_ids) == len(answer_spans), "Mismatch between context, questions, and answer lengths"
-    """
-    print (context_ids[0],ctx_mask[0],len(context_ids[0]))
-    print (context[0])
-    print (question_ids[0],q_mask[0],len(question_ids[0]))
-    print (answer_spans[0])
-    print ("MAX_CTX_LEN",max_ctx_len)
-    print ("MAX_Q_LEN",max_q_len)
-    print ("VOCAB_SIZE",len(vocab))
-    print ("EMBEDDINGS_SHAPE",embeddings.shape)
-    print ("CONTEXT_IDS_SHAPE",context_ids.shape)
-    print ("QUESTION_IDS_SHAPE",question_ids.shape)
-    print ("CTX_MASKS_SHAPE",ctx_mask.shape)
-    print ("Q_MASKS_SHAPE",q_mask.shape)
-    print ("ANSWER_SPANS_SHAPE",answer_spans.shape)
 
-    print ("VAL_CONTEXT_IDS_SHAPE",val_context_ids.shape)
-    print ("VAL_QUESTION_IDS_SHAPE",val_question_ids.shape)
-    print ("VAL_CTX_MASKS_SHAPE",val_ctx_mask.shape)
-    print ("VAL_Q_MASKS_SHAPE",val_q_mask.shape)
-    print ("VAL_ANSWER_SPANS_SHAPE",val_answer_spans.shape)
-    """
-    
-    encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
-    decoder = Decoder(output_size=FLAGS.output_size)
+    print("Using model type : {}".format(FLAGS.model_type))
 
-    qa = QASystem(encoder, decoder,FLAGS,embeddings,max_ctx_len, max_q_len)
+    qa = QASystem(pretrained_embeddings=embeddings,
+                  flags=FLAGS)
 
     if not os.path.exists(FLAGS.log_dir):
         os.makedirs(FLAGS.log_dir)
@@ -245,9 +244,22 @@ def main(_):
         initialize_model(sess, qa, load_train_dir)
 
         save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
-        qa.train(sess, dataset, val_dataset,save_train_dir)
+        saver = tf.train.Saver()
 
-        qa.evaluate_answer(sess, dataset, val_dataset, vocab, FLAGS.evaluate, log=True,sample=None,eval_set="final_val")
+        # TODO: name arguments explicitly
+
+        qa.train(sess, saver, dataset, val_dataset, save_train_dir)
+
+        qa.evaluate_answer(sess,
+                           dataset,
+                           val_dataset,
+                           vocab,
+                           FLAGS.evaluate,
+                           log=True,
+                           sample=None,
+                           eval_set="final_val")
+
+        #qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
 
 if __name__ == "__main__":
     tf.app.run()
