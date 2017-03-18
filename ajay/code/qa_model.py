@@ -355,7 +355,7 @@ class QASystem(object):
         yp2_lst = []
         prog_train = Progbar(target=1 + int(len(data) / self.flags.batch_size))
         for i, batch in enumerate(minibatches(data, self.flags.batch_size)):
-            yp, yp2 = self.optimize(session, *data)
+            yp, yp2 = self.decode(session, *batch)
             yp_lst.append(yp)
             yp2_lst.append(yp2)
             prog_train.update(i + 1, [("computing F1...", 1)])
@@ -413,23 +413,18 @@ class QASystem(object):
         else:
             #np.random.seed(0)
             sampled = dataset[np.random.choice(dataset.shape[0], sample)]
-
+        #embed()
         a_s, a_e = self.answer(session, sampled)
 
         f1=[]
         em=[]
         #embed()
-        sampled = sampled.T
-        for i in range(len(sampled[0])):
+        for i in range(len(sampled)):
             pred_words=' '.join(context[i][a_s[i]:a_e[i]+1])
-            actual_words=' '.join(context[i][sampled[2][i][0]:sampled[2][i][1]+1])
+            actual_words=' '.join(context[i][sampled[i][2][0]:sampled[i][2][1]+1])
             f1.append(f1_score(pred_words,actual_words))
             cur_em=(exact_match_score(pred_words,actual_words))
-            val=1.0
-            for word in cur_em:
-                if not word:
-                    val=0.0
-            em.append(val)
+            em.append(float(cur_em))
 
         if log:
             logging.info("{},F1: {}, EM: {}, for {} samples".format(eval_set,np.mean(f1), None , sample))
@@ -445,26 +440,26 @@ class QASystem(object):
             prog_train.update(i + 1, [("train loss", loss)])
         print("")
 
-        if self.flags.debug == 0:
-            prog_val = Progbar(target=1 + int(len(val_set) / self.flags.batch_size))
-            for i, batch in enumerate(minibatches(val_set, self.flags.batch_size)):
-                val_loss = self.validate(sess, *batch)
-                prog_val.update(i + 1, [("val loss", val_loss)])
-                print("")
+        #if self.flags.debug == 0:
+        prog_val = Progbar(target=1 + int(len(val_set) / self.flags.batch_size))
+        for i, batch in enumerate(minibatches(val_set, self.flags.batch_size)):
+            val_loss = self.validate(sess, *batch)
+            prog_val.update(i + 1, [("val loss", val_loss)])
+            print("")
 
-            self.evaluate_answer(session=sess,
-                                 dataset=train_set,
-                                 context=train_context,
-                                 sample=None,
-                                 log=True,
-                                 eval_set="-Epoch TRAIN-")
+        self.evaluate_answer(session=sess,
+                             dataset=train_set,
+                             context=train_context,
+                             sample=None,
+                             log=True,
+                             eval_set="-Epoch TRAIN-")
 
-            self.evaluate_answer(session=sess,
-                                 dataset=val_set,
-                                 context=val_context,
-                                 sample=None,
-                                 log=True,
-                                 eval_set="-Epoch VAL-")
+        self.evaluate_answer(session=sess,
+                             dataset=val_set,
+                             context=val_context,
+                             sample=None,
+                             log=True,
+                             eval_set="-Epoch VAL-")
             # train_f1, train_em = self.evaluate_answer(sess,train_set, context=context[0], sample=100, log=True, eval_set="-Epoch TRAIN-")
             # val_f1, val_em = self.evaluate_answer(sess,val_set, context=context[1], sample=100, log=True, eval_set="-Epoch VAL-")
 
@@ -505,27 +500,42 @@ class QASystem(object):
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
 
         context_ids, question_ids, answer_spans, ctx_mask ,q_mask, train_context = dataset
-        train_dataset = np.array([context_ids, question_ids, answer_spans, ctx_mask ,q_mask])
+        train_dataset = [context_ids, question_ids, answer_spans, ctx_mask ,q_mask]
+        train_dataset = [np.array(col) for col in zip(*train_dataset)]
 
         val_context_ids, val_question_ids, val_answer_spans, val_ctx_mask, val_q_mask, val_context = val_dataset
-        val_dataset = np.array([val_context_ids, val_question_ids, val_answer_spans, val_ctx_mask, val_q_mask])
+        val_dataset = [val_context_ids, val_question_ids, val_answer_spans, val_ctx_mask, val_q_mask]
+        val_dataset = [np.array(col) for col in zip(*val_dataset)]
         
         num_epochs = self.flags.epochs
 
         if self.flags.debug:
             train_dataset = train_dataset[:self.flags.batch_size]
             val_dataset = val_dataset[:self.flags.batch_size]
-            num_epochs = 100
+            #num_epochs = 100
+            num_epochs = 1
 
         for epoch in range(num_epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
             self.run_epoch(sess=session,
-                           train_set=train_dataset.T, 
-                           val_set=val_dataset.T,
+                           train_set=train_dataset, 
+                           val_set=val_dataset,
                            train_context=train_context,
                            val_context=val_context)
             logging.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
+
+    def minibatches(self, data, batch_size, shuffle=True):
+        num_data = len(data)
+        context_ids, question_ids, answer_spans, ctx_mask ,q_mask = data
+        indices = np.arange(num_data)
+        if shuffle:
+            np.random.shuffle(indices)
+        for minibatch_start in np.arange(0, num_data, batch_size):
+            minibatch_indices = indices[minibatch_start:minibatch_start + batch_size]
+            yield [context_ids[minibatch_indices], question_ids[minibatch_indices], answer_spans[minibatch_indices], ctx_mask[minibatch_indices], q_mask[minibatch_indices]]
+
+
 
 
 
