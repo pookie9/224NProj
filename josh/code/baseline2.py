@@ -360,7 +360,7 @@ class QASystem(object):
         self.learning_rate = self.starter_learning_rate
 
         # learning rate decay
-        self.learning_rate = tf.train.exponential_decay(self.starter_learning_rate, self.global_step,1000, 0.96, staircase=True)
+        #self.learning_rate = tf.train.exponential_decay(self.starter_learning_rate, self.global_step,1000, 0.96, staircase=True)
 
         self.optimizer = get_optimizer("adam")
         
