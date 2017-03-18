@@ -227,7 +227,7 @@ class Decoder(object):
 
         with vs.variable_scope("answer_end"):
             cell = tf.nn.rnn_cell.GRUCell(state_size)
-            all_end_probs, _ = tf.nn.dynamic_rnn(cell, start_probs,sequence_length=masks,dtype=tf.float32,initial_state=None)
+            all_end_probs, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,sequence_length=masks,dtype=tf.float32,initial_state=None)
 
             W_end = tf.get_variable("W_end", shape=(1, 1, state_size),initializer=tf.contrib.layers.xavier_initializer())
             end_probs = tf.reduce_sum(all_end_probs * W_end, reduction_indices=2)
@@ -270,21 +270,14 @@ class Decoder(object):
 
     #     with tf.variable_scope(self.name):
 
-    #         if model_type == "gru":
-    #             cell = tf.nn.rnn_cell.GRUCell(state_size)
-    #         elif model_type == "lstm":
-    #             cell = tf.nn.rnn_cell.BasicLSTMCell(state_size)
-    #             #knowledge_rep = knowledge_rep[-1]
-    #         else:
-    #             raise Exception('Must specify model type.')
-
-
     #         with vs.variable_scope("answer_start"):
+    #             cell = tf.nn.rnn_cell.GRUCell(state_size)
     #             all_start_probs, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,sequence_length=masks,dtype=tf.float32,initial_state=None)
     #             #start_probs = tf.nn.rnn_cell._linear(start_probs, self.output_size, True, 1.0)
 
 
     #         with vs.variable_scope("answer_end"):
+    #             cell = tf.nn.rnn_cell.GRUCell(state_size)
     #             all_end_probs, _ = tf.nn.dynamic_rnn(cell, all_start_probs,sequence_length=masks,dtype=tf.float32,initial_state=None)
     #             #end_probs = tf.nn.rnn_cell._linear(end_probs, self.output_size, True, 1.0)
 
@@ -303,12 +296,12 @@ class Decoder(object):
     #         end_probs = tf.reduce_sum(all_end_probs * W_end, reduction_indices=2) + b_end
 
 
-    #     # bool_masks = tf.cast(tf.sequence_mask(masks,maxlen=self.output_size),tf.float32)
-    #     # a = tf.constant(-1e30)
-    #     # b = tf.constant(1.0)
-    #     # add_mask = (a*(b-bool_masks))
-    #     # start_probs = start_probs + add_mask
-    #     # end_probs = end_probs + add_mask
+    #     bool_masks = tf.cast(tf.sequence_mask(masks,maxlen=self.output_size),tf.float32)
+    #     a = tf.constant(-1e30)
+    #     b = tf.constant(1.0)
+    #     add_mask = (a*(b-bool_masks))
+    #     start_probs = start_probs + add_mask
+    #     end_probs = end_probs + add_mask
 
     #     return start_probs, end_probs
 
@@ -359,6 +352,8 @@ class QASystem(object):
             # gradient clipping
             self.optimizer = self.optimizer(self.learning_rate)
             grads = self.optimizer.compute_gradients(self.loss)
+            # print("GRADIENTS - ")
+            # tf.Print(grads)
             for i, (grad, var) in enumerate(grads):
                 if grad is not None:
                     grads[i] = (tf.clip_by_norm(grad, self.flags.max_gradient_norm), var)
@@ -405,14 +400,14 @@ class QASystem(object):
             # scores is shape (batch_size, N, 1)
             # scores = tf.reduce_sum(A*q_states, reduction_indices=2, keep_dims=True)
             C_P = batch_matmul(A,q_states)
-            P = tf.concat(1,[C_P,ctx_states])
-            W = tf.get_variable("W_mix", shape=(1,2*output_size,output_size),initializer=tf.contrib.layers.xavier_initializer())
+            P = tf.concat(2,[C_P,ctx_states])
+            W = tf.get_variable("W_mix", shape=(1,2*state_size,state_size),initializer=tf.contrib.layers.xavier_initializer())
             b = tf.get_variable("b_mix", shape=(1,output_size,state_size),initializer=tf.contrib.layers.xavier_initializer())
 
             batch_size = tf.shape(P)[0]
             W_tiled = tf.tile(W,[batch_size,1,1])
-            ctx_state_rep = batch_matmul(tf.transpose(P,perm=[0,2,1]),W_tiled)
-            ctx_state_rep = tf.transpose(ctx_state_rep,perm=[0,2,1]) + b
+            ctx_state_rep = batch_matmul(P,W_tiled)
+            ctx_state_rep = ctx_state_rep + b
 
 
         # # do a softmax over the scores
@@ -444,7 +439,7 @@ class QASystem(object):
 
         ctx_states, final_ctx_state = self.context_encoder.encode(self.context_embeddings, self.mask_ctx_placeholder, 
                                                                              encoder_state_input=None,#final_question_state, 
-                                                                             attention_inputs=None,
+                                                                             attention_inputs=None,#question_states,
                                                                              model_type=self.flags.model_type)
 
 
@@ -476,11 +471,11 @@ class QASystem(object):
         with vs.variable_scope("embeddings"):
             embeddings = tf.Variable(self.pretrained_embeddings, name='embedding', dtype=tf.float32, trainable=False) #only learn one common embedding
 
-            question_embeddings = tf.nn.embedding_lookup(embeddings, self.question_placeholder)
-            self.question_embeddings = tf.reshape(question_embeddings, [-1, self.max_q_len, self.embed_size])
+            self.question_embeddings = tf.nn.embedding_lookup(embeddings, self.question_placeholder)
+            #self.question_embeddings = tf.reshape(question_embeddings, [-1, self.max_q_len, self.embed_size])
 
-            context_embeddings = tf.nn.embedding_lookup(embeddings, self.context_placeholder)
-            self.context_embeddings = tf.reshape(context_embeddings, [-1, self.max_ctx_len, self.embed_size])
+            self.context_embeddings = tf.nn.embedding_lookup(embeddings, self.context_placeholder)
+            #self.context_embeddings = tf.reshape(context_embeddings, [-1, self.max_ctx_len, self.embed_size])
 
 
     def optimize(self, session, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch):
@@ -493,8 +488,6 @@ class QASystem(object):
 
         # fill in this feed_dictionary like:
         # input_feed['train_x'] = train_x
-
-        embed()
 
 
         input_feed[self.context_placeholder] = context_batch
@@ -643,7 +636,7 @@ class QASystem(object):
             for i, batch in enumerate(minibatches(val_set, self.flags.batch_size)):
                 val_loss = self.validate(sess, *batch)
                 prog_val.update(i + 1, [("val loss", val_loss)])
-                print("")
+            print("")
             train_f1, train_em = self.evaluate_answer(sess,train_set, context=context[0], sample=100, log=True, eval_set="-Epoch TRAIN-")
             val_f1, val_em = self.evaluate_answer(sess,val_set, context=context[1], sample=100, log=True, eval_set="-Epoch VAL-")
 
@@ -719,7 +712,7 @@ class QASystem(object):
         if self.flags.debug:
             train_dataset = train_dataset[:self.flags.batch_size]
             val_dataset = val_dataset[:self.flags.batch_size]
-            num_epochs = 2
+            num_epochs = 30
 
         for epoch in range(num_epochs):
             #print(session.run([self.learning_rate]))

@@ -17,18 +17,19 @@ from IPython import embed
 
 logging.basicConfig(level=logging.INFO)
 
-tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")
+tf.app.flags.DEFINE_float("learning_rate", 0.005, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 8, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
-tf.app.flags.DEFINE_integer("batch_size", 20, "Batch size to use during training.")
+tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 100, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("output_size", 300, "The output size of your model.")
+tf.app.flags.DEFINE_integer("question_size", 30, "The output size of your model.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
 tf.app.flags.DEFINE_string("load_train_dir", "", "Training directory to load model parameters from to resume training (default: {train_dir}).")
-tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (default: ./log)")
+tf.app.flags.DEFINE_string("log_dir", "log", "FPath to store log and flag files (default: ./log)")
 tf.app.flags.DEFINE_string("optimizer", "adam", "adam / sgd")
 tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per print.")
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkout)points to keep, 0 indicates keep all.")
@@ -137,22 +138,28 @@ def main(_):
 
     # Reducing context length to the specified max in FLAGS.output_size
     paragraph_lengths = []
+    # question_lengths = []
     for i in range(0,len(context_ids)):
         paragraph_lengths.append(len(context_ids[i]))
         context_ids[i] = context_ids[i][:FLAGS.output_size]
         context[i] = context[i][:FLAGS.output_size]
         answer_spans[i] = np.clip(answer_spans[i],0,FLAGS.output_size-1)
+        question_ids[i] = question_ids[i][:FLAGS.question_size]
     for j in range(0,len(val_context_ids)):
         paragraph_lengths.append(len(val_context_ids[j]))
         val_context_ids[j] = val_context_ids[j][:FLAGS.output_size]
         val_context[j] = val_context[j][:FLAGS.output_size]
         val_answer_spans[j] = np.clip(val_answer_spans[j],0,FLAGS.output_size-1)
+        val_question_ids[j] = val_question_ids[j][:FLAGS.question_size]
+
+
+
 
     #print ('Par_mean:',np.mean(paragraph_lengths),'Par_std:',np.std(paragraph_lengths))
 
-    par_mean = np.mean(paragraph_lengths)
-    par_max_len = max(paragraph_lengths)
-    std = np.std(paragraph_lengths)
+    # par_mean = np.mean(paragraph_lengths)
+    # par_max_len = max(paragraph_lengths)
+    # std = np.std(paragraph_lengths)
 
     train_dataset = [context_ids,question_ids,answer_spans]
     val_dataset = [val_context_ids,val_question_ids,val_answer_spans]
