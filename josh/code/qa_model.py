@@ -96,6 +96,7 @@ class Encoder(object):
                  It can be context-level representation, word-level representation,
                  or both.
         """
+        print ("ENCODING WITH SCOPE: ",self.name)
         with tf.variable_scope(self.name):
             # Define the correct cell type.
             if attention_inputs is None:
