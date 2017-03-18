@@ -26,8 +26,8 @@ tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this nor
 tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
-tf.app.flags.DEFINE_integer("state_size", 100, "Size of each model layer.")
-tf.app.flags.DEFINE_integer("output_size", 766, "The output size of your model.") #766 #600
+tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
+tf.app.flags.DEFINE_integer("output_size", 600, "The output size of your model.") #766 #600
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
@@ -40,9 +40,11 @@ tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab 
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 
 # added
-tf.app.flags.DEFINE_string("model_type", "gru", "specify either gru or lstm cell type for encoding")
+tf.app.flags.DEFINE_string("model_type", "lstm", "specify either gru or lstm cell type for encoding")
 tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
 tf.app.flags.DEFINE_integer("grad_clip", 1, "whether to clip gradients or not")
+tf.app.flags.DEFINE_integer("question_size", 60, "The question size of your model.") # 60
+
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -140,19 +142,27 @@ def main(_):
     val_answer_spans = initialize_data(val_answer_span_path)
     val_context = initialize_data(val_context_path, keep_as_string=True)
 
-    # truncate paragraphs to output_size
+    # Reducing context length to the specified max in FLAGS.output_size
     paragraph_lengths = []
-    for i in range(0, len(context_ids)):
-        context_ids[i] = context_ids[i][:FLAGS.output_size]
+    # question_lengths = []
+    for i in range(0,len(context_ids)):
         paragraph_lengths.append(len(context_ids[i]))
-    for j in range(0, len(val_context_ids)):
-        val_context_ids[j] = val_context_ids[j][:FLAGS.output_size]
+        context_ids[i] = context_ids[i][:FLAGS.output_size]
+        context[i] = context[i][:FLAGS.output_size]
+        answer_spans[i] = np.clip(answer_spans[i],0,FLAGS.output_size-1)
+        question_ids[i] = question_ids[i][:FLAGS.question_size]
+    for j in range(0,len(val_context_ids)):
         paragraph_lengths.append(len(val_context_ids[j]))
+        val_context_ids[j] = val_context_ids[j][:FLAGS.output_size]
+        val_context[j] = val_context[j][:FLAGS.output_size]
+        val_answer_spans[j] = np.clip(val_answer_spans[j],0,FLAGS.output_size-1)
+        val_question_ids[j] = val_question_ids[j][:FLAGS.question_size]
 
-    train_dataset = [context_ids,question_ids,answer_spans]
-    val_dataset = [val_context_ids,val_question_ids,val_answer_spans]
-    contexts = [context,val_context]
-    dataset = (train_dataset,val_dataset)
+
+    train_dataset = [context_ids, question_ids, answer_spans]
+    val_dataset = [val_context_ids, val_question_ids, val_answer_spans]
+    contexts = [context, val_context]
+    dataset = (train_dataset, val_dataset)
 
     max_ctx_len = max(max(map(len, context_ids)), max(map(len, val_context_ids)))
     max_q_len = max(max(map(len, question_ids)), max(map(len, val_question_ids)))
@@ -165,15 +175,7 @@ def main(_):
 
     print("Using model type : {}".format(FLAGS.model_type))
 
-    question_encoder = Encoder(size=FLAGS.state_size, name="question_encoder")
-    context_encoder = Encoder(size=FLAGS.state_size, name="context_encoder")
-    decoder = Decoder(hidden_size=FLAGS.state_size, output_size=FLAGS.output_size)
-
-    qa = QASystem(encoder=(question_encoder, context_encoder), 
-                  decoder=decoder, 
-                  pretrained_embeddings=embeddings,
-                  max_ctx_len=max_ctx_len,
-                  max_q_len=max_q_len,
+    qa = QASystem(pretrained_embeddings=embeddings,
                   flags=FLAGS)
 
     if not os.path.exists(FLAGS.log_dir):
