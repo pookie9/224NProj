@@ -350,11 +350,24 @@ class QASystem(object):
 
     def answer(self, session, data):
 
-        data = np.array(data).T
-        yp, yp2 = self.decode(session, *data)
+        # TODO: minibatches
+        yp_lst = []
+        yp2_lst = []
+        prog_train = Progbar(target=1 + int(len(data) / self.flags.batch_size))
+        for i, batch in enumerate(minibatches(data, self.flags.batch_size)):
+            yp, yp2 = self.optimize(session, *data)
+            yp_lst.append(yp)
+            yp2_lst.append(yp2)
+            prog_train.update(i + 1, [("computing F1...", 1)])
+        print("")
+        yp_all = np.concatenate(yp_lst, axis=0)
+        yp2_all = np.concatenate(yp2_lst, axis=0)
 
-        a_s = np.argmax(yp, axis=1)
-        a_e = np.argmax(yp2, axis=1)
+        # data = np.array(data).T
+        # yp, yp2 = self.decode(session, *data)
+
+        a_s = np.argmax(yp_all, axis=1)
+        a_e = np.argmax(yp2_all, axis=1)
 
         return (a_s, a_e)
 
@@ -410,15 +423,13 @@ class QASystem(object):
         for i in range(len(sampled[0])):
             pred_words=' '.join(context[i][a_s[i]:a_e[i]+1])
             actual_words=' '.join(context[i][sampled[2][i][0]:sampled[2][i][1]+1])
-            # print('I:',i)
-            # print ("INDICES",a_s[i],a_e[i])
-            # print ("PRED_WORDS:",pred_words)
-            # print ("ACTUAL WORD",actual_words)
             f1.append(f1_score(pred_words,actual_words))
-            # print('F1:',f1)
-            em.append(exact_match_score(pred_words,actual_words))
-            # print('EM:',em)
-            # print (" ")
+            cur_em=(exact_match_score(pred_words,actual_words))
+            val=1.0
+            for word in cur_em:
+                if not word:
+                    val=0.0
+            em.append(val)
 
         if log:
             logging.info("{},F1: {}, EM: {}, for {} samples".format(eval_set,np.mean(f1), None , sample))
@@ -427,7 +438,7 @@ class QASystem(object):
         return f1, em
 
     ### Imported from NERModel
-    def run_epoch(self, sess, train_set, val_set, context):
+    def run_epoch(self, sess, train_set, val_set, train_context, val_context):
         prog_train = Progbar(target=1 + int(len(train_set) / self.flags.batch_size))
         for i, batch in enumerate(minibatches(train_set, self.flags.batch_size)):
             loss = self.optimize(sess, *batch)
@@ -443,21 +454,21 @@ class QASystem(object):
 
             self.evaluate_answer(session=sess,
                                  dataset=train_set,
-                                 context=context[0],
+                                 context=train_context,
                                  sample=None,
                                  log=True,
                                  eval_set="-Epoch TRAIN-")
 
             self.evaluate_answer(session=sess,
                                  dataset=val_set,
-                                 context=context[1],
+                                 context=val_context,
                                  sample=None,
                                  log=True,
                                  eval_set="-Epoch VAL-")
             # train_f1, train_em = self.evaluate_answer(sess,train_set, context=context[0], sample=100, log=True, eval_set="-Epoch TRAIN-")
             # val_f1, val_em = self.evaluate_answer(sess,val_set, context=context[1], sample=100, log=True, eval_set="-Epoch VAL-")
 
-    def train(self, session, saver, dataset, contexts, train_dir):
+    def train(self, session, saver, dataset, val_dataset, train_dir):
         """
         Implement main training loop
 
@@ -491,56 +502,30 @@ class QASystem(object):
         params = tf.trainable_variables()
         num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
         toc = time.time()
-        logging.info("Number of params: %d (retrieval took %f secs)" % (num_params, toc - tic))
+        logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
 
-        train_dataset, val_dataset = dataset
+        context_ids, question_ids, answer_spans, ctx_mask ,q_mask, train_context = dataset
+        train_dataset = np.array([context_ids, question_ids, answer_spans, ctx_mask ,q_mask])
 
-        train_mask = [None, None]
-        val_mask = [None, None]
-        train_dataset[0], train_mask[0] = self.pad(train_dataset[0], self.p_size) #train_context_ids
-        train_dataset[1], train_mask[1] = self.pad(train_dataset[1], self.q_size) #train_question_ids
-
-        val_dataset[0], val_mask[0] = self.pad(val_dataset[0], self.p_size) #val_context_ids
-        val_dataset[1], val_mask[1] = self.pad(val_dataset[1], self.q_size) #val_question_ids
-
-
-        for i in range(1,len(train_dataset[0])):
-            assert len(train_dataset[0][i]) == len(train_dataset[0][i - 1]), "Incorrectly padded train context"
-            assert len(train_dataset[1][i]) == len(train_dataset[1][i - 1]), "Incorrectly padded train question"
-
-        for i in range(1,len(val_dataset[0])):
-            assert len(val_dataset[0][i]) == len(val_dataset[0][i - 1]), "Incorrectly padded val context"
-            assert len(val_dataset[1][i]) == len(val_dataset[1][i - 1]), "Incorrectly padded val question"
-
-        print("Training/val data padding verification completed.")
-
-        train_dataset.extend(train_mask)
-        val_dataset.extend(val_mask)
-
-        # take transpose to be shape [None, num_examples]
-        train_dataset = np.array(train_dataset).T
-        val_dataset = np.array(val_dataset).T
-
-        train_context = contexts[0]
-        val_context = contexts[1]
-
+        val_context_ids, val_question_ids, val_answer_spans, val_ctx_mask, val_q_mask, val_context = val_dataset
+        val_dataset = np.array([val_context_ids, val_question_ids, val_answer_spans, val_ctx_mask, val_q_mask])
+        
         num_epochs = self.flags.epochs
 
         if self.flags.debug:
             train_dataset = train_dataset[:self.flags.batch_size]
             val_dataset = val_dataset[:self.flags.batch_size]
-            num_epochs = 20
+            num_epochs = 100
 
         for epoch in range(num_epochs):
-            #print(session.run([self.learning_rate]))
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
-            self.run_epoch(sess=session, train_set=train_dataset, val_set=val_dataset, context=val_context)
+            self.run_epoch(sess=session,
+                           train_set=train_dataset.T, 
+                           val_set=val_dataset.T,
+                           train_context=train_context,
+                           val_context=val_context)
             logging.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
-
-        self.evaluate_answer(session, train_dataset, train_context, sample=None, log=True, eval_set="-FINAL TRAIN-")
-        self.evaluate_answer(session, val_dataset, val_context, sample=None, log=True, eval_set="-FINAL VAL-")
-
 
 
 

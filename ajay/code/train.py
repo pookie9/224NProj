@@ -74,27 +74,25 @@ def initialize_vocab(vocab_path):
         raise ValueError("Vocabulary file %s not found.", vocab_path)
 
 def initialize_data(data_path,keep_as_string=False):
+    print ("LOADING",data_path)
     if tf.gfile.Exists(data_path):
-        print ("LOADING:",data_path)
-        dataset = []
+        data=[]
         with tf.gfile.GFile(data_path, mode="rb") as f:
-            dataset.extend(f.readlines())
-        dataset = [line.strip('\n').split() for line in dataset]
+            data.extend(f.readlines())
+        data = [line.strip('\n').split() for line in data]
         if not keep_as_string:
-            dataset = [[int(num) for num in line] for line in dataset]
-        return dataset
+            data=[[int(num) for num in line] for line in data]
+        return data
     else:
-        raise ValueError("Vocabulary file %s not found.", data_path)
+        raise ValueError("Vocabulary file %s not found.", vocab_path)
 
     
 def initialize_embeddings(embed_path):
-    
     if tf.gfile.Exists(embed_path):
         embeddings=np.load(embed_path)
         return embeddings['glove']
-
     else:
-        raise ValueError("Embeddings file %s not found.", embed_path)
+        raise ValueError("Embeddings file %s not found",embed_path)
 
     
 def get_normalized_train_dir(train_dir):
@@ -112,24 +110,50 @@ def get_normalized_train_dir(train_dir):
     os.symlink(os.path.abspath(train_dir), global_train_dir)
     return global_train_dir
 
+def pad(sequence, max_length):
+    # assumes sequence is a list of lists of word, pads to the longest "sentence"
+    # returns (padded_sequence, mask)
+    from qa_data import PAD_ID
+
+    padded_sequence = []
+    mask = []
+    for sentence in sequence:
+        mask.append(len(sentence))
+        sentence.extend([PAD_ID] * (max_length - len(sentence)))
+        padded_sequence.append(sentence)
+    return (padded_sequence, mask)
+
+
+def check_pad(seqs, mask):
+    from qa_data import PAD_ID
+    assert len(seqs)==len(mask)
+    prev_len=len(seqs[0])
+    for seq,m in zip(seqs,mask):
+        assert len(seq)>=m, "MASK LONGER THAN SEQUENCE (len(seq),mask)"+str(len(seq))+","+str(m)
+        assert len(seq)==prev_len, "MISMATCHED LENGTH AFTER PAD"
+        for i in range(len(seq)):
+            if i<m:
+                assert seq[i]!=PAD_ID, "PADDING FOUND BEFORE END OF MASK (mask, index)"+str(m)+","+str(i)
+            if i>=m:
+                assert seq[i]==PAD_ID, "NON-PAD FOUND AFTER END OF MASK (mask, index, ID)"+str(m)+","+str(i)+","+str(seq[i])
+        
+
 
 def main(_):
 
     # Do what you need to load datasets from FLAGS.data_dir
     dataset = None
 
-
     embed_path = FLAGS.embed_path or pjoin("data", "squad", "glove.trimmed.{}.npz".format(FLAGS.embedding_size))
     vocab_path = FLAGS.vocab_path or pjoin(FLAGS.data_dir, "vocab.dat")
     vocab, rev_vocab = initialize_vocab(vocab_path)
 
-    context_ids_path = pjoin(FLAGS.data_dir, "train.ids.context")
+    context_ids_path = pjoin(FLAGS.data_dir,"train.ids.context")
     question_ids_path = pjoin(FLAGS.data_dir, "train.ids.question")
     answer_span_path = pjoin(FLAGS.data_dir, "train.span")
     val_context_ids_path = pjoin(FLAGS.data_dir, "val.ids.context")
     val_question_ids_path = pjoin(FLAGS.data_dir, "val.ids.question")
     val_answer_span_path = pjoin(FLAGS.data_dir, "val.span")
-
     context_path = pjoin(FLAGS.data_dir, "train.context")
     val_context_path = pjoin(FLAGS.data_dir, "val.context")
 
@@ -142,6 +166,8 @@ def main(_):
     val_answer_spans = initialize_data(val_answer_span_path)
     val_context = initialize_data(val_context_path, keep_as_string=True)
 
+    # TODO: check this clipping, especially the answer
+
     # Reducing context length to the specified max in FLAGS.output_size
     paragraph_lengths = []
     # question_lengths = []
@@ -149,26 +175,51 @@ def main(_):
         paragraph_lengths.append(len(context_ids[i]))
         context_ids[i] = context_ids[i][:FLAGS.output_size]
         context[i] = context[i][:FLAGS.output_size]
-        answer_spans[i] = np.clip(answer_spans[i],0,FLAGS.output_size-1)
+        answer_spans[i] = np.clip(answer_spans[i], 0, FLAGS.output_size-1)
         question_ids[i] = question_ids[i][:FLAGS.question_size]
     for j in range(0,len(val_context_ids)):
         paragraph_lengths.append(len(val_context_ids[j]))
         val_context_ids[j] = val_context_ids[j][:FLAGS.output_size]
         val_context[j] = val_context[j][:FLAGS.output_size]
-        val_answer_spans[j] = np.clip(val_answer_spans[j],0,FLAGS.output_size-1)
+        val_answer_spans[j] = np.clip(val_answer_spans[j], 0, FLAGS.output_size-1)
         val_question_ids[j] = val_question_ids[j][:FLAGS.question_size]
 
 
-    train_dataset = [context_ids, question_ids, answer_spans]
-    val_dataset = [val_context_ids, val_question_ids, val_answer_spans]
-    contexts = [context, val_context]
-    dataset = (train_dataset, val_dataset)
+    embeddings=initialize_embeddings(embed_path)
 
-    max_ctx_len = max(max(map(len, context_ids)), max(map(len, val_context_ids)))
-    max_q_len = max(max(map(len, question_ids)), max(map(len, val_question_ids)))
+    max_ctx_len=max(max(map(len,context_ids)),max(map(len,val_context_ids)))
+    max_q_len=max(max(map(len,question_ids)),max(map(len,val_question_ids)))
+
+    assert max_ctx_len==FLAGS.output_size, "MISMATCH BETWEEN MAX_CTX_LEN AND FLAGS.OUTPUT_SIZE: "+str(max_ctx_len)+", "+str(FLAGS.output_size)
+
+    context_ids, ctx_mask = pad(context_ids, FLAGS.output_size)
+    question_ids, q_mask = pad(question_ids, FLAGS.question_size)
+    val_context_ids, val_ctx_mask = pad(val_context_ids, FLAGS.output_size)
+    val_question_ids, val_q_mask = pad(val_question_ids, FLAGS.question_size)
+
+    context_ids = np.array(context_ids)
+    question_ids = np.array(question_ids)
+    answer_spans = np.array(answer_spans)
+    ctx_mask = np.array(ctx_mask)
+    q_mask = np.array(q_mask)
+
+    val_context_ids = np.array(val_context_ids)
+    val_question_ids = np.array(val_question_ids)
+    val_answer_spans = np.array(val_answer_spans)
+    val_ctx_mask = np.array(val_ctx_mask)
+    val_q_mask = np.array(val_q_mask)
     
-    embeddings = initialize_embeddings(embed_path)
-    
+    check_pad(context_ids, ctx_mask)
+    print("CONTEXT IDS PADDED AND CHECKED")
+    check_pad(question_ids, q_mask)
+    print("QUESTION IDS PADDED AND CHECKED")
+    check_pad(val_context_ids, val_ctx_mask)
+    print("VAL CONTEXT IDS PADDED AND CHECKED")
+    check_pad(val_question_ids, val_q_mask)
+    print("VAL QUESTION IDS PADDED AND CHECKED")
+
+    dataset=[context_ids,question_ids,answer_spans,ctx_mask,q_mask,context]
+    val_dataset=[val_context_ids,val_question_ids,val_answer_spans,val_ctx_mask,val_q_mask,val_context]
     assert len(vocab) == embeddings.shape[0], "Mismatch between embedding shape and vocab length"
     assert embeddings.shape[1] == FLAGS.embedding_size, "Mismatch between embedding shape and FLAGS"
     assert len(context_ids) == len(question_ids) == len(answer_spans), "Mismatch between context, questions, and answer lengths"
@@ -194,7 +245,18 @@ def main(_):
         save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
         saver = tf.train.Saver()
 
-        qa.train(sess, saver, dataset, contexts, save_train_dir)
+        # TODO: name arguments explicitly
+
+        qa.train(sess, saver, dataset, val_dataset, save_train_dir)
+
+        qa.evaluate_answer(sess,
+                           dataset,
+                           val_dataset,
+                           vocab,
+                           FLAGS.evaluate,
+                           log=True,
+                           sample=None,
+                           eval_set="final_val")
 
         #qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
 
