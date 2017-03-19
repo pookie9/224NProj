@@ -26,18 +26,25 @@ logging.basicConfig(level=logging.INFO)
 FLAGS = tf.app.flags.FLAGS
 
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
-tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
+tf.app.flags.DEFINE_float("dropout", 0.10, "Fraction of units randomly dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 0, "Number of epochs to train.")
-tf.app.flags.DEFINE_integer("state_size", 50, "Size of each model layer.") # 200
+tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
-tf.app.flags.DEFINE_integer("output_size", 750, "The output size of your model.")
+tf.app.flags.DEFINE_integer("output_size", 500, "The output size of your model.")
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory (default: ./train).")
 tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (default: ./log)")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 tf.app.flags.DEFINE_string("dev_path", "data/squad/dev-v1.1.json", "Path to the JSON dev set to evaluate against (default: ./data/squad/dev-v1.1.json)")
+
+# added
+tf.app.flags.DEFINE_string("model_type", "lstm", "specify either gru or lstm cell type for encoding")
+tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
+tf.app.flags.DEFINE_integer("grad_clip", 0, "whether to clip gradients or not")
+tf.app.flags.DEFINE_integer("question_size", 60, "The question size of your model.") # 60
+
 
 def initialize_model(session, model, train_dir):
     ckpt = tf.train.get_checkpoint_state(train_dir)
@@ -130,7 +137,14 @@ def generate_answers(sess, model, dataset, rev_vocab):
     :return:
     """
     answers = {}
-
+    uuids=dataset[-1]
+    starts,ends=model.answer(sess,dataset[:-1])
+    context_ids=dataset[0]
+    
+    for i in range(len(starts)):
+        answer_ids=context_ids[i][starts[i]:ends[i]+1]
+        cur_answer=[rev_vocab[int(word)] for word in answer_ids]
+        answers[uuids[i]]=' '.join(cur_answer)
     return answers
 
 
@@ -149,7 +163,28 @@ def get_normalized_train_dir(train_dir):
     os.symlink(os.path.abspath(train_dir), global_train_dir)
     return global_train_dir
 
+def initialize_embeddings(embed_path):
+    if tf.gfile.Exists(embed_path):
+        embeddings=np.load(embed_path)
+        return embeddings['glove']
+    else:
+        raise ValueError("Embeddings file %s not found",embed_path)
 
+def pad(sequence, max_length):
+    # assumes sequence is a list of lists of word, pads to the longest "sentence"
+    # returns (padded_sequence, mask)
+    from qa_data import PAD_ID
+
+    padded_sequence = []
+    mask = []    
+    for sentence in sequence:
+        sentence=map(int,sentence.strip().split())
+        mask.append(len(sentence))
+        sentence.extend([PAD_ID] * (max_length - len(sentence)))
+        padded_sequence.append(sentence)
+    return (padded_sequence, mask)
+
+    
 def main(_):
 
     vocab, rev_vocab = initialize_vocab(FLAGS.vocab_path)
@@ -171,16 +206,30 @@ def main(_):
     dev_dirname = os.path.dirname(os.path.abspath(FLAGS.dev_path))
     dev_filename = os.path.basename(FLAGS.dev_path)
     context_data, question_data, question_uuid_data = prepare_dev(dev_dirname, dev_filename, vocab)
-    dataset = (context_data, question_data, question_uuid_data)
-
+    context_ids, ctx_mask = pad(context_data, FLAGS.output_size)
+    question_ids, q_mask = pad(question_data, FLAGS.question_size)
+    #dataset = (context_data, question_data, question_uuid_data)
+    paragraph_lengths=[]
+    for i in range(0, len(context_ids)):
+        paragraph_lengths.append(len(context_ids[i]))
+        context_ids[i] = context_ids[i][:FLAGS.output_size]
+        question_ids[i] = question_ids[i][:FLAGS.question_size]
+    
+    context_ids=np.array(context_ids)
+    question_ids=np.array(question_ids)
+    ctx_mask=np.array(ctx_mask)
+    q_mask=np.array(q_mask)
+    answer_span=np.array([(0,0)]*len(context_ids))#Need this because minibatches is expecting it this way
+    dataset=[context_ids,question_ids,answer_span,ctx_mask,q_mask,question_uuid_data]
+    embeddings=initialize_embeddings(embed_path)
     # ========= Model-specific =========
     # You must change the following code to adjust to your model
 
-    encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
-    decoder = Decoder(output_size=FLAGS.output_size)
+    #encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
+    #decoder = Decoder(output_size=FLAGS.output_size)
 
-    qa = QASystem(encoder, decoder)
-
+    #qa = QASystem(pretrained_embeddings=embeddings,flags=FLAGS)
+    qa=QASystem(pretrained_embeddings=embeddings,flags=FLAGS)
     with tf.Session() as sess:
         train_dir = get_normalized_train_dir(FLAGS.train_dir)
         initialize_model(sess, qa, train_dir)
