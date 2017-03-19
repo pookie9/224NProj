@@ -47,7 +47,6 @@ tf.app.flags.DEFINE_integer("question_size", 60, "The question size of your mode
 
 
 def initialize_model(session, model, train_dir):
-    print ("TRAIN_DIR",train_dir)
     ckpt = tf.train.get_checkpoint_state(train_dir)
     v2_path = ckpt.model_checkpoint_path + ".index" if ckpt else ""
     if ckpt and (tf.gfile.Exists(ckpt.model_checkpoint_path) or tf.gfile.Exists(v2_path)):
@@ -139,6 +138,7 @@ def generate_answers(sess, model, dataset, rev_vocab):
     """
     answers = {}
     uuids=dataset[-1]
+    dataset=[d[:100] for d in dataset]
     starts,ends=model.answer(sess,dataset[:-1])
     context_ids=dataset[0]
     
@@ -146,6 +146,7 @@ def generate_answers(sess, model, dataset, rev_vocab):
     for i in range(len(starts)):
         answer_ids=context_ids[i][starts[i]:ends[i]+1]
         answers[uuids[i]]=' '.join(answer_ids)
+    
     return answers
 
 
@@ -229,8 +230,8 @@ def main(_):
     #encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
     #decoder = Decoder(output_size=FLAGS.output_size)
 
-    qa = QASystem(pretrained_embeddings=embeddings,flags=FLAGS)
-
+    #qa = QASystem(pretrained_embeddings=embeddings,flags=FLAGS)
+    qa=QASystem(pretrained_embeddings=embeddings,flags=FLAGS)
     with tf.Session() as sess:
         train_dir = get_normalized_train_dir(FLAGS.train_dir)
         initialize_model(sess, qa, train_dir)

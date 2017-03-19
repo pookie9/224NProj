@@ -142,7 +142,6 @@ class QASystem(object):
         self.p_size = self.flags.output_size
         self.q_size = self.flags.question_size
         self.embed_size = self.flags.embedding_size
-
         self.encoder = Encoder(hidden_size=self.h_size,
                                dropout=(1.0-self.flags.dropout))
 
@@ -190,7 +189,8 @@ class QASystem(object):
             # no gradient clipping
             self.train_op = self.optimizer(self.learning_rate).minimize(self.loss, global_step=self.global_step)
 
-
+        self.saver=tf.train.Saver()
+        
     def pad(self, sequence, max_length):
         # assumes sequence is a list of lists of word, pads to the longest "sentence"
         # returns (padded_sequence, mask)
@@ -361,7 +361,7 @@ class QASystem(object):
             yp, yp2 = self.decode(session, *batch)
             yp_lst.append(yp)
             yp2_lst.append(yp2)
-            prog_train.update(i + 1, [("computing F1...", 1)])
+            prog_train.update(i + 1, [("Answering Questions....",0.0)])
         print("")
         yp_all = np.concatenate(yp_lst, axis=0)
         yp2_all = np.concatenate(yp2_lst, axis=0)
@@ -497,7 +497,7 @@ class QASystem(object):
         # you will also want to save your model parameters in train_dir
         # so that you can use your trained model to make predictions, or
         # even continue training
-
+        #self.saver=saver
         tic = time.time()
         params = tf.trainable_variables()
         num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
@@ -530,7 +530,7 @@ class QASystem(object):
             logging.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
 
-    def minibatches(self, data, batch_size, shuffle=False):
+    def minibatches(self, data, batch_size, shuffle=True):
         num_data = len(data[0])
         context_ids, question_ids, answer_spans, ctx_mask, q_mask = data
         indices = np.arange(num_data)

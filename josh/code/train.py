@@ -7,8 +7,8 @@ import json
 
 import tensorflow as tf
 
-#from qa_model import Encoder, QASystem, Decoder
-from qa_multiperspective import Encoder, QASystem, Decoder
+from qa_model import Encoder, QASystem, Decoder
+#from qa_multiperspective import Encoder, QASystem, Decoder
 from os.path import join as pjoin
 import numpy as np
 
