@@ -413,7 +413,7 @@ class QASystem(object):
             sample = len(dataset[0])
         else:
             #np.random.seed(0)
-            inds = np.random.choice(len(dataset[0], sample))
+            inds = np.random.choice(len(dataset[0]), sample)
             sampled = [elem[inds] for elem in dataset]
 
         a_s, a_e = self.answer(session, sampled)
