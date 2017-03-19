@@ -415,7 +415,7 @@ class QASystem(object):
             #np.random.seed(0)
             inds = np.random.choice(len(dataset[0]), sample)
             sampled = [elem[inds] for elem in dataset]
-
+            context=[context[i] for i in inds]
         a_s, a_e = self.answer(session, sampled)
 
         context_ids, question_ids, answer_spans, ctx_mask, q_mask = sampled
