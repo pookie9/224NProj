@@ -528,7 +528,7 @@ class QASystem(object):
                            train_context=train_context,
                            val_context=val_context)
             logging.info("Saving model in %s", train_dir)
-            saver.save(session, train_dir)
+            self.saver.save(session, train_dir)
 
     def minibatches(self, data, batch_size, shuffle=True):
         num_data = len(data[0])

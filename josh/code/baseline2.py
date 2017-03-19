@@ -190,7 +190,7 @@ class QASystem(object):
         else:
             # no gradient clipping
             self.train_op = self.optimizer(self.learning_rate).minimize(self.loss, global_step=self.global_step)
-
+        self.saver=tf.train.Saver()
 
     def pad(self, sequence, max_length):
         # assumes sequence is a list of lists of word, pads to the longest "sentence"
@@ -526,7 +526,7 @@ class QASystem(object):
                            train_context=train_context,
                            val_context=val_context)
             logging.info("Saving model in %s", train_dir)
-            saver.save(session, train_dir)
+            self.saver.save(session, train_dir)
 
     def minibatches(self, data, batch_size, shuffle=True):
         num_data = len(data[0])

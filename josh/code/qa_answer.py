@@ -138,15 +138,13 @@ def generate_answers(sess, model, dataset, rev_vocab):
     """
     answers = {}
     uuids=dataset[-1]
-    dataset=[d[:100] for d in dataset]
     starts,ends=model.answer(sess,dataset[:-1])
     context_ids=dataset[0]
     
-
     for i in range(len(starts)):
         answer_ids=context_ids[i][starts[i]:ends[i]+1]
-        answers[uuids[i]]=' '.join(answer_ids)
-    
+        cur_answer=[rev_vocab[int(word)] for word in answer_ids]
+        answers[uuids[i]]=' '.join(cur_answer)
     return answers
 
 
@@ -180,7 +178,7 @@ def pad(sequence, max_length):
     padded_sequence = []
     mask = []    
     for sentence in sequence:
-        sentence=sentence.strip().split()
+        sentence=map(int,sentence.strip().split())
         mask.append(len(sentence))
         sentence.extend([PAD_ID] * (max_length - len(sentence)))
         padded_sequence.append(sentence)
