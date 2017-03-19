@@ -20,6 +20,7 @@ from tensorflow.python.ops.gen_math_ops import _batch_mat_mul as batch_matmul
 
 logging.basicConfig(level=logging.INFO)
 
+
 ### Baseline 2:
 
 def get_optimizer(opt):
@@ -103,18 +104,20 @@ class Decoder(object):
         with vs.variable_scope("decoder"):
 
             with vs.variable_scope("answer_start"):
-                # start probs = P * W, P is (?, max_len, hid_state), W is (hid_state)
-                rep_reshaped = tf.reshape(knowledge_rep, [-1, self.hidden_size])
-                start_probs = tf.nn.rnn_cell._linear(rep_reshaped, output_size=1, bias=True)
+                cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
+                cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
+                start_states, start_final_state = tf.nn.dynamic_rnn(cell, knowledge_rep, sequence_length=masks, dtype=tf.float32)
+                start_states_reshaped = tf.reshape(start_states, [-1, self.hidden_size])
+                start_probs = tf.nn.rnn_cell._linear(start_states_reshaped, output_size=1, bias=True)
                 start_probs = tf.reshape(start_probs, [-1, self.output_size])
 
+                
             with vs.variable_scope("answer_end"):
                 cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
                 cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
-                all_end_probs, _ = tf.nn.dynamic_rnn(cell, knowledge_rep, sequence_length=masks, dtype=tf.float32)
-
-                all_end_probs_reshaped = tf.reshape(all_end_probs, [-1, self.hidden_size])
-                end_probs = tf.nn.rnn_cell._linear(all_end_probs_reshaped, output_size=1, bias=True)
+                end_states, end_final_state = tf.nn.dynamic_rnn(cell, knowledge_rep,initial_state=start_final_state, sequence_length=masks, dtype=tf.float32)
+                end_states_reshaped = tf.reshape(end_states, [-1, self.hidden_size])
+                end_probs = tf.nn.rnn_cell._linear(end_states_reshaped, output_size=1, bias=True)
                 end_probs = tf.reshape(end_probs, [-1, self.output_size])
 
             # Masking
@@ -288,6 +291,8 @@ class QASystem(object):
         # fill in this feed_dictionary like:
         # input_feed['train_x'] = train_x
 
+        # TODO: should we do np.map(np.array()) here???????
+ 
         input_feed[self.context_placeholder] = context_batch
         input_feed[self.question_placeholder] = question_batch
         input_feed[self.mask_ctx_placeholder] = mask_ctx_batch
@@ -333,10 +338,10 @@ class QASystem(object):
         """
         input_feed = {}
 
-        input_feed[self.context_placeholder] = np.array(map(np.array, context_batch))
-        input_feed[self.question_placeholder] = np.array(map(np.array, question_batch))
-        input_feed[self.mask_ctx_placeholder] = np.array(map(np.array, mask_ctx_batch))
-        input_feed[self.mask_q_placeholder] = np.array(mask_q_batch)
+        input_feed[self.context_placeholder] = context_batch
+        input_feed[self.question_placeholder] = question_batch
+        input_feed[self.mask_ctx_placeholder] = mask_ctx_batch
+        input_feed[self.mask_q_placeholder] = mask_q_batch
         input_feed[self.dropout_placeholder] = self.flags.dropout
 
 
@@ -349,21 +354,17 @@ class QASystem(object):
 
     def answer(self, session, data):
 
-        # TODO: minibatches
         yp_lst = []
         yp2_lst = []
-        prog_train = Progbar(target=1 + int(len(data) / self.flags.batch_size))
-        for i, batch in enumerate(minibatches(data, self.flags.batch_size)):
-            yp, yp2 = self.optimize(session, *data)
+        prog_train = Progbar(target=1 + int(len(data[0]) / self.flags.batch_size))
+        for i, batch in enumerate(self.minibatches(data, self.flags.batch_size, shuffle=False)):
+            yp, yp2 = self.decode(session, *batch)
             yp_lst.append(yp)
             yp2_lst.append(yp2)
             prog_train.update(i + 1, [("computing F1...", 1)])
         print("")
         yp_all = np.concatenate(yp_lst, axis=0)
         yp2_all = np.concatenate(yp2_lst, axis=0)
-
-        # data = np.array(data).T
-        # yp, yp2 = self.decode(session, *data)
 
         a_s = np.argmax(yp_all, axis=1)
         a_e = np.argmax(yp2_all, axis=1)
@@ -408,64 +409,64 @@ class QASystem(object):
 
         if sample is None:
             sampled = dataset
-            sample = len(dataset)
+            sample = len(dataset[0])
         else:
             #np.random.seed(0)
-            sampled = dataset[np.random.choice(dataset.shape[0], sample)]
-
+            inds = np.random.choice(len(dataset[0]), sample)
+            
+            sampled = [elem[inds] for elem in dataset]
+            context=[context[i] for i in inds]
+            
         a_s, a_e = self.answer(session, sampled)
 
-        f1=[]
-        em=[]
-        #embed()
-        sampled = sampled.T
+        context_ids, question_ids, answer_spans, ctx_mask, q_mask = sampled
+
+        f1 = []
+        em = []
+        # #embed()
+        print (list(answer_spans))
         for i in range(len(sampled[0])):
             pred_words=' '.join(context[i][a_s[i]:a_e[i]+1])
-            actual_words=' '.join(context[i][sampled[2][i][0]:sampled[2][i][1]+1])
-            f1.append(f1_score(pred_words,actual_words))
-            cur_em=(exact_match_score(pred_words,actual_words))
-            val=1.0
-            for word in cur_em:
-                if not word:
-                    val=0.0
-            em.append(val)
+            actual_words=' '.join(context[i][answer_spans[i][0]:answer_spans[i][1]+1])
+            f1.append(f1_score(pred_words, actual_words))
+            cur_em = exact_match_score(pred_words, actual_words)
+            em.append(float(cur_em))
 
         if log:
-            logging.info("{},F1: {}, EM: {}, for {} samples".format(eval_set,np.mean(f1), None , sample))
-        # f1=sum(f1)/len(f1)
-        # em=sum(em)/len(em)
-        return f1, em
+            logging.info("{},F1: {}, EM: {}, for {} samples".format(eval_set, np.mean(f1), np.mean(em), sample))
+
+        return np.mean(f1), np.mean(em)
 
     ### Imported from NERModel
     def run_epoch(self, sess, train_set, val_set, train_context, val_context):
-        prog_train = Progbar(target=1 + int(len(train_set) / self.flags.batch_size))
-        for i, batch in enumerate(minibatches(train_set, self.flags.batch_size)):
+        prog_train = Progbar(target=1 + int(len(train_set[0]) / self.flags.batch_size))
+        for i, batch in enumerate(self.minibatches(train_set, self.flags.batch_size)):
             loss = self.optimize(sess, *batch)
             prog_train.update(i + 1, [("train loss", loss)])
         print("")
 
-        if self.flags.debug == 0:
-            prog_val = Progbar(target=1 + int(len(val_set) / self.flags.batch_size))
-            for i, batch in enumerate(minibatches(val_set, self.flags.batch_size)):
-                val_loss = self.validate(sess, *batch)
-                prog_val.update(i + 1, [("val loss", val_loss)])
-                print("")
+        #if self.flags.debug == 0:
+        prog_val = Progbar(target=1 + int(len(val_set[0]) / self.flags.batch_size))
+        for i, batch in enumerate(self.minibatches(val_set, self.flags.batch_size)):
+            val_loss = self.validate(sess, *batch)
+            prog_val.update(i + 1, [("val loss", val_loss)])
+        print("")
 
-            self.evaluate_answer(session=sess,
-                                 dataset=train_set,
-                                 context=train_context,
-                                 sample=None,
-                                 log=True,
-                                 eval_set="-Epoch TRAIN-")
+        self.evaluate_answer(session=sess,
+                             dataset=train_set,
+                             context=train_context,
+                             sample=len(val_set[0]),
+                             log=True,
+                             eval_set="-Epoch TRAIN-")
 
-            self.evaluate_answer(session=sess,
-                                 dataset=val_set,
-                                 context=val_context,
-                                 sample=None,
-                                 log=True,
-                                 eval_set="-Epoch VAL-")
-            #train_f1, train_em = self.evaluate_answer(sess,train_set, context=context[0], sample=100, log=True, eval_set="-Epoch TRAIN-")
-            #val_f1, val_em = self.evaluate_answer(sess,val_set, context=context[1], sample=100, log=True, eval_set="-Epoch VAL-")
+        self.evaluate_answer(session=sess,
+                             dataset=val_set,
+                             context=val_context,
+                             sample=None,
+                             log=True,
+                             eval_set="-Epoch VAL-")
+            # train_f1, train_em = self.evaluate_answer(sess,train_set, context=context[0], sample=100, log=True, eval_set="-Epoch TRAIN-")
+            # val_f1, val_em = self.evaluate_answer(sess,val_set, context=context[1], sample=100, log=True, eval_set="-Epoch VAL-")
 
     def train(self, session, saver, dataset, val_dataset, train_dir):
         """
@@ -504,26 +505,20 @@ class QASystem(object):
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
 
         context_ids, question_ids, answer_spans, ctx_mask ,q_mask, train_context = dataset
-        print ("CTX",context_ids.shape)
-        print ("Q",question_ids.shape)
-        print ("answerspans",answer_spans.shape)
-        print ("CTX_MASK",ctx_mask.shape)
-        print ("Q_MASK",q_mask.shape)
         train_dataset = [context_ids, question_ids, answer_spans, ctx_mask ,q_mask]
-        train_dataset=np.array([np.array(col) for col in zip(*train_dataset)])
+        #train_dataset = [np.array(col) for col in zip(*train_dataset)]
 
         val_context_ids, val_question_ids, val_answer_spans, val_ctx_mask, val_q_mask, val_context = val_dataset
         val_dataset = [val_context_ids, val_question_ids, val_answer_spans, val_ctx_mask, val_q_mask]
-        val_dataset=np.array([np.array(col) for col in zip(*val_dataset)])
-        print ("TRAIN DATSET",train_dataset.shape)
-        print ("VAL DATSET",val_dataset.shape)
+        #val_dataset = [np.array(col) for col in zip(*val_dataset)]
+        
         num_epochs = self.flags.epochs
 
         if self.flags.debug:
-            train_dataset = train_dataset[:self.flags.batch_size]
-            val_dataset = val_dataset[:self.flags.batch_size]
+            train_dataset = [elem[:self.flags.batch_size*1] for elem in train_dataset]
+            val_dataset = [elem[:self.flags.batch_size] for elem in val_dataset]
             num_epochs = 100
-
+            #num_epochs = 1
 
         for epoch in range(num_epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
@@ -534,6 +529,18 @@ class QASystem(object):
                            val_context=val_context)
             logging.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
+
+    def minibatches(self, data, batch_size, shuffle=False):
+        num_data = len(data[0])
+        context_ids, question_ids, answer_spans, ctx_mask, q_mask = data
+        indices = np.arange(num_data)
+        if shuffle:
+            np.random.shuffle(indices)
+        for minibatch_start in np.arange(0, num_data, batch_size):
+            minibatch_indices = indices[minibatch_start:minibatch_start + batch_size]
+            yield [context_ids[minibatch_indices], question_ids[minibatch_indices], answer_spans[minibatch_indices], ctx_mask[minibatch_indices], q_mask[minibatch_indices]]
+
+
 
 
 

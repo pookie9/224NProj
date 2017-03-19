@@ -217,22 +217,27 @@ class Decoder(object):
         :return:
         """ 
 
-        
-        with vs.variable_scope("answer_start"):
+        batch_size = tf.shape(knowledge_rep)[0]
+        with vs.variable_scope("answer_start"):            
             W_start = tf.get_variable("W_start", shape=(1,1,state_size),initializer=tf.contrib.layers.xavier_initializer())
-            batch_size = tf.shape(knowledge_rep)[0]
             W_start = tf.tile(W_start,[batch_size,1,1])
+            print ("W_START",W_start)
+            print ("knowledge_rep",knowledge_rep)
             start_probs = batch_matmul(knowledge_rep,tf.transpose(W_start,perm=[0,2,1]))
             
 
         with vs.variable_scope("answer_end"):
             cell = tf.nn.rnn_cell.GRUCell(state_size)
-            all_end_probs, _ = tf.nn.dynamic_rnn(cell, start_probs,sequence_length=masks,dtype=tf.float32,initial_state=None)
-
+            all_end_probs, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,sequence_length=masks,dtype=tf.float32,initial_state=None)
             W_end = tf.get_variable("W_end", shape=(1, 1, state_size),initializer=tf.contrib.layers.xavier_initializer())
-            end_probs = tf.reduce_sum(all_end_probs * W_end, reduction_indices=2)
+            print ("all_end_probs",all_end_probs)
+            print ("W_END",W_end)
+            W_end = tf.tile(W_end,[batch_size,1,1])
+            end_probs = batch_matmul(all_end_probs,tf.transpose(W_end,perm=[0,2,1]))
+            #end_probs = tf.reduce_sum(all_end_probs * W_end, reduction_indices=2)
 
         start_probs = tf.squeeze(start_probs,2)
+        end_probs = tf.squeeze(end_probs,2)
 
         bool_masks = tf.cast(tf.sequence_mask(masks,maxlen=self.output_size),tf.float32)
         a = tf.constant(-1e30)
@@ -336,7 +341,12 @@ class QASystem(object):
         self.mask_q_placeholder = tf.placeholder(tf.int32, shape=(None,), name='mask_q_placeholder')
         self.mask_ctx_placeholder = tf.placeholder(tf.int32, shape=(None,), name='mask_ctx_placeholder')
         self.dropout_placeholder = tf.placeholder(tf.float32, shape=(), name='dropout_placeholder')
-
+        print ("CTX",self.context_placeholder)
+        print ("QUESTION",self.question_placeholder)
+        print ("ANSWER",self.answer_span_placeholder)
+        print ("MASKQ",self.mask_q_placeholder)
+        print ("MASKCTX",self.mask_ctx_placeholder)
+        print ("DROPOUT",self.dropout_placeholder)
         # ==== assemble pieces ====
         with tf.variable_scope("qa", initializer=tf.uniform_unit_scaling_initializer(1.0)):
             self.setup_embeddings()
@@ -350,8 +360,7 @@ class QASystem(object):
         self.learning_rate = self.starter_learning_rate
 
         # learning rate decay
-        # self.learning_rate = tf.train.exponential_decay(self.starter_learning_rate, self.global_step,
-        #                                    1000, 0.96, staircase=True)
+        #self.learning_rate = tf.train.exponential_decay(self.starter_learning_rate, self.global_step,1000, 0.96, staircase=True)
 
         self.optimizer = get_optimizer("adam")
         
@@ -374,7 +383,8 @@ class QASystem(object):
         padded_sequence = []
         mask = []
         for sentence in sequence:
-            mask.append(len(sentence))
+            sentence=sentence[:max_length]
+            mask.append(min(len(sentence),max_length))
             sentence.extend([PAD_ID] * (max_length - len(sentence)))
             padded_sequence.append(sentence)
         return (padded_sequence, mask)
@@ -405,14 +415,19 @@ class QASystem(object):
             # scores is shape (batch_size, N, 1)
             # scores = tf.reduce_sum(A*q_states, reduction_indices=2, keep_dims=True)
             C_P = batch_matmul(A,q_states)
-            P = tf.concat(1,[C_P,ctx_states])
-            W = tf.get_variable("W_mix", shape=(1,2*output_size,output_size),initializer=tf.contrib.layers.xavier_initializer())
+            P = tf.concat(2,[C_P,ctx_states])
+            W = tf.get_variable("W_mix", shape=(1,2*state_size,state_size),initializer=tf.contrib.layers.xavier_initializer())
             b = tf.get_variable("b_mix", shape=(1,output_size,state_size),initializer=tf.contrib.layers.xavier_initializer())
-
+            print ("W_MIX",W)
+            print ("P",P)
+            print ("B",b)
+            
             batch_size = tf.shape(P)[0]
             W_tiled = tf.tile(W,[batch_size,1,1])
-            ctx_state_rep = batch_matmul(tf.transpose(P,perm=[0,2,1]),W_tiled)
-            ctx_state_rep = tf.transpose(ctx_state_rep,perm=[0,2,1]) + b
+            ctx_state_rep=batch_matmul(P,W_tiled)+b
+            
+            #ctx_state_rep = batch_matmul(tf.transpose(P,perm=[0,2,1]),W_tiled)
+            #ctx_state_rep = tf.transpose(ctx_state_rep,perm=[0,2,1]) + b
 
 
         # # do a softmax over the scores
@@ -473,14 +488,14 @@ class QASystem(object):
         Loads distributed word representations based on placeholder tokens
         :return:
         """
-        with vs.variable_scope("embeddings"):
-            embeddings = tf.Variable(self.pretrained_embeddings, name='embedding', dtype=tf.float32, trainable=False) #only learn one common embedding
+        #with vs.variable_scope("embeddings"):
+        embeddings = tf.Variable(self.pretrained_embeddings, name='embedding', dtype=tf.float32, trainable=False) #only learn one common embedding
 
-            question_embeddings = tf.nn.embedding_lookup(embeddings, self.question_placeholder)
-            self.question_embeddings = tf.reshape(question_embeddings, [-1, self.max_q_len, self.embed_size])
+        self.question_embeddings = tf.nn.embedding_lookup(embeddings, self.question_placeholder)
+        #self.question_embeddings = tf.reshape(question_embeddings, [-1, self.max_q_len, self.embed_size])
 
-            context_embeddings = tf.nn.embedding_lookup(embeddings, self.context_placeholder)
-            self.context_embeddings = tf.reshape(context_embeddings, [-1, self.max_ctx_len, self.embed_size])
+        self.context_embeddings = tf.nn.embedding_lookup(embeddings, self.context_placeholder)
+        #self.context_embeddings = tf.reshape(context_embeddings, [-1, self.max_ctx_len, self.embed_size])
 
 
     def optimize(self, session, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch):
@@ -636,7 +651,7 @@ class QASystem(object):
             prog_train.update(i + 1, [("train loss", loss)])
         print("")
 
-        if self.flags.debug == 0:
+        if self.flags.debug == 0 or True:
             prog_val = Progbar(target=1 + int(len(val_set) / self.flags.batch_size))
             for i, batch in enumerate(minibatches(val_set, self.flags.batch_size)):
                 val_loss = self.validate(sess, *batch)

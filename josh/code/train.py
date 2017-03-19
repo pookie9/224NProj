@@ -11,23 +11,19 @@ from qa_model import Encoder, QASystem, Decoder
 from os.path import join as pjoin
 import numpy as np
 
-# TODO: output size 600
-
-# TO ASK:
-
-    # How to do LSTM in decoder?
-
 import logging
+
+from IPython import embed
 
 logging.basicConfig(level=logging.INFO)
 
 tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
-tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
-tf.app.flags.DEFINE_integer("batch_size", 10000, "Batch size to use during training.")
+tf.app.flags.DEFINE_float("dropout", 0.10, "Fraction of units randomly dropped on non-recurrent connections.") # 0.15
+tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
-tf.app.flags.DEFINE_integer("output_size", 600, "The output size of your model.") #766 #600
+tf.app.flags.DEFINE_integer("output_size", 500, "The output size of your model.") #766 #600
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
@@ -42,7 +38,7 @@ tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embeddin
 # added
 tf.app.flags.DEFINE_string("model_type", "lstm", "specify either gru or lstm cell type for encoding")
 tf.app.flags.DEFINE_integer("debug", 1, "whether to set debug or not")
-tf.app.flags.DEFINE_integer("grad_clip", 1, "whether to clip gradients or not")
+tf.app.flags.DEFINE_integer("grad_clip", 0, "whether to clip gradients or not")
 tf.app.flags.DEFINE_integer("question_size", 60, "The question size of your model.") # 60
 
 
@@ -73,8 +69,8 @@ def initialize_vocab(vocab_path):
     else:
         raise ValueError("Vocabulary file %s not found.", vocab_path)
 
-def initialize_data(data_path,keep_as_string=False):
-    print ("LOADING",data_path)
+def initialize_data(data_path, keep_as_string=False):
+    print ("LOADING", data_path)
     if tf.gfile.Exists(data_path):
         data=[]
         with tf.gfile.GFile(data_path, mode="rb") as f:
@@ -84,7 +80,7 @@ def initialize_data(data_path,keep_as_string=False):
             data=[[int(num) for num in line] for line in data]
         return data
     else:
-        raise ValueError("Vocabulary file %s not found.", vocab_path)
+        raise ValueError("Data file %s not found.", data_path)
 
     
 def initialize_embeddings(embed_path):
@@ -169,24 +165,23 @@ def main(_):
     # TODO: check this clipping, especially the answer
 
     # Reducing context length to the specified max in FLAGS.output_size
+
     paragraph_lengths = []
     # question_lengths = []
-    
-    for i in range(0,len(context_ids)):
+    for i in range(0, len(context_ids)):
         paragraph_lengths.append(len(context_ids[i]))
         context_ids[i] = context_ids[i][:FLAGS.output_size]
         context[i] = context[i][:FLAGS.output_size]
         answer_spans[i] = np.clip(answer_spans[i], 0, FLAGS.output_size-1)
         question_ids[i] = question_ids[i][:FLAGS.question_size]
-    for j in range(0,len(val_context_ids)):
+    for j in range(0, len(val_context_ids)):
         paragraph_lengths.append(len(val_context_ids[j]))
         val_context_ids[j] = val_context_ids[j][:FLAGS.output_size]
         val_context[j] = val_context[j][:FLAGS.output_size]
         val_answer_spans[j] = np.clip(val_answer_spans[j], 0, FLAGS.output_size-1)
         val_question_ids[j] = val_question_ids[j][:FLAGS.question_size]
-    
 
-    embeddings=initialize_embeddings(embed_path)
+    embeddings = initialize_embeddings(embed_path)
 
     max_ctx_len=max(max(map(len,context_ids)),max(map(len,val_context_ids)))
     max_q_len=max(max(map(len,question_ids)),max(map(len,val_question_ids)))
@@ -203,7 +198,7 @@ def main(_):
     answer_spans = np.array(answer_spans)
     ctx_mask = np.array(ctx_mask)
     q_mask = np.array(q_mask)
-
+    
     val_context_ids = np.array(val_context_ids)
     val_question_ids = np.array(val_question_ids)
     val_answer_spans = np.array(val_answer_spans)
@@ -246,20 +241,11 @@ def main(_):
         save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
         saver = tf.train.Saver()
 
-        # TODO: name arguments explicitly
-
-        qa.train(sess, saver, dataset, val_dataset, save_train_dir)
-
-        qa.evaluate_answer(sess,
-                           dataset,
-                           val_dataset,
-                           vocab,
-                           FLAGS.evaluate,
-                           log=True,
-                           sample=None,
-                           eval_set="final_val")
-
-        #qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
+        qa.train(session=sess,
+                 saver=saver,
+                 dataset=dataset,
+                 val_dataset=val_dataset,
+                 train_dir=save_train_dir)
 
 if __name__ == "__main__":
     tf.app.run()

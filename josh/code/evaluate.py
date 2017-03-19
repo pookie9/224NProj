@@ -29,18 +29,26 @@ def normalize_answer(s):
 def f1_score(prediction, ground_truth):
     prediction_tokens = normalize_answer(prediction).split()
     ground_truth_tokens = normalize_answer(ground_truth).split()
+    if len(prediction_tokens)==len(ground_truth_tokens)==0:
+        print ("PROBLEM HERE",prediction," ------ ",ground_truth)
+        return 1.0
     common = Counter(prediction_tokens) & Counter(ground_truth_tokens)
     num_same = sum(common.values())
     if num_same == 0:
         return 0
     precision = 1.0 * num_same / len(prediction_tokens)
     recall = 1.0 * num_same / len(ground_truth_tokens)
-    f1 = (2 * precision * recall) / (precision + recall)
+    f1 = (2 * precision * recall) / (precision + recall)    
     return f1
 
 
 def exact_match_score(prediction, ground_truth):
-    return (normalize_answer(prediction) == normalize_answer(ground_truth))
+    print ("PREDICT:",prediction)
+    print ("GROUND_TRUTH",ground_truth)
+    if len(normalize_answer(prediction))==len(normalize_answer(ground_truth))==0:
+        return prediction.strip()==ground_truth.strip()
+    else:
+        return (normalize_answer(prediction) == normalize_answer(ground_truth))
 
 
 def metric_max_over_ground_truths(metric_fn, prediction, ground_truths):
