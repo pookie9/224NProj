@@ -104,21 +104,20 @@ class Decoder(object):
         with vs.variable_scope("decoder"):
 
             with vs.variable_scope("answer_start"):
-                # P is (batch_size, output_dim, hid_dim), reshape to (batch_size * output_dim, hid_dim)
-                rep_reshaped = tf.reshape(knowledge_rep, [-1, self.hidden_size])
-                # weights W = (hid_dim, 1)
-                start_probs = tf.nn.rnn_cell._linear(rep_reshaped, output_size=1, bias=True)
-                # P is now (batch_size * output_dim, 1), so reshape to get start_probs
+                cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
+                cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
+                start_states, start_final_state = tf.nn.dynamic_rnn(cell, knowledge_rep, sequence_length=masks, dtype=tf.float32)
+                start_states_reshaped = tf.reshape(start_states, [-1, self.hidden_size])
+                start_probs = tf.nn.rnn_cell._linear(start_states_reshaped, output_size=1, bias=True)
                 start_probs = tf.reshape(start_probs, [-1, self.output_size])
 
+                
             with vs.variable_scope("answer_end"):
                 cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
                 cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
-                all_end_probs, _ = tf.nn.dynamic_rnn(cell, knowledge_rep, sequence_length=masks, dtype=tf.float32)
-
-                # do same trick as above on LSTM output to get end_probs
-                all_end_probs_reshaped = tf.reshape(all_end_probs, [-1, self.hidden_size])
-                end_probs = tf.nn.rnn_cell._linear(all_end_probs_reshaped, output_size=1, bias=True)
+                end_states, end_final_state = tf.nn.dynamic_rnn(cell, knowledge_rep,initial_state=start_final_state, sequence_length=masks, dtype=tf.float32)
+                end_states_reshaped = tf.reshape(end_states, [-1, self.hidden_size])
+                end_probs = tf.nn.rnn_cell._linear(end_states_reshaped, output_size=1, bias=True)
                 end_probs = tf.reshape(end_probs, [-1, self.output_size])
 
             # Masking
@@ -414,8 +413,10 @@ class QASystem(object):
         else:
             #np.random.seed(0)
             inds = np.random.choice(len(dataset[0]), sample)
+            
             sampled = [elem[inds] for elem in dataset]
-
+            context=[context[i] for i in inds]
+            
         a_s, a_e = self.answer(session, sampled)
 
         context_ids, question_ids, answer_spans, ctx_mask, q_mask = sampled
@@ -423,6 +424,7 @@ class QASystem(object):
         f1 = []
         em = []
         # #embed()
+        print (list(answer_spans))
         for i in range(len(sampled[0])):
             pred_words=' '.join(context[i][a_s[i]:a_e[i]+1])
             actual_words=' '.join(context[i][answer_spans[i][0]:answer_spans[i][1]+1])
@@ -513,7 +515,7 @@ class QASystem(object):
         num_epochs = self.flags.epochs
 
         if self.flags.debug:
-            train_dataset = [elem[:self.flags.batch_size*100] for elem in train_dataset]
+            train_dataset = [elem[:self.flags.batch_size*1] for elem in train_dataset]
             val_dataset = [elem[:self.flags.batch_size] for elem in val_dataset]
             num_epochs = 100
             #num_epochs = 1
@@ -528,7 +530,7 @@ class QASystem(object):
             logging.info("Saving model in %s", train_dir)
             saver.save(session, train_dir)
 
-    def minibatches(self, data, batch_size, shuffle=True):
+    def minibatches(self, data, batch_size, shuffle=False):
         num_data = len(data[0])
         context_ids, question_ids, answer_spans, ctx_mask, q_mask = data
         indices = np.arange(num_data)
