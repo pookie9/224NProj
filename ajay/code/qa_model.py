@@ -32,11 +32,13 @@ def get_optimizer(opt):
         assert (False)
     return optfn
 
+
 class Encoder(object):
     """
     Arguments:
         -size: dimension of the hidden states
     """
+
     def __init__(self, hidden_size, dropout):
         self.hidden_size = hidden_size
         self.dropout = dropout
@@ -52,7 +54,7 @@ class Encoder(object):
                       through masked steps
         :param encoder_state_input: (Optional) pass this as initial hidden state
                                     to tf.nn.dynamic_rnn to build conditional representations
-        :param attention_inputs: (Optional) pass this to compute attention and context 
+        :param attention_inputs: (Optional) pass this to compute attention and context
                                     over these encodings
         :return: an encoded representation of your input.
                  It can be context-level representation, word-level representation,
@@ -64,23 +66,24 @@ class Encoder(object):
             # Define the correct cell type.
             if attention_inputs is None:
                 if model_type == "gru":
-                    cell = tf.nn.rnn_cell.GRUCell(self.hidden_size)
+                    cell_fw = tf.nn.rnn_cell.GRUCell(self.hidden_size)
+                    cell_bw = tf.nn.rnn_cell.GRUCell(self.hidden_size)
                 elif model_type == "lstm":
-                    cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
+                    cell_fw = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
+                    cell_bw = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
                 else:
                     raise Exception('Must specify model type.')
             else:
                 raise Exception("Attention not implemented.")
 
-            cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
-            outputs, final_state = tf.nn.bidirectional_dynamic_rnn(cell, cell, inputs,
+            cell_fw = tf.nn.rnn_cell.DropoutWrapper(cell_fw, output_keep_prob=self.dropout)
+            cell_bw = tf.nn.rnn_cell.DropoutWrapper(cell_bw, output_keep_prob=self.dropout)
+            outputs, final_state = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, inputs,
                                                                    sequence_length=masks,
                                                                    dtype=tf.float32)
 
-            # add forward and backward hidden states together
-            final_outputs = outputs[0] + outputs[1]
+            return outputs, final_state
 
-            return final_outputs, final_state
 
 class Decoder(object):
     def __init__(self, hidden_size, output_size, dropout):
@@ -88,7 +91,7 @@ class Decoder(object):
         self.output_size = output_size
         self.dropout = dropout
 
-    def decode(self, knowledge_rep, masks, model_type="gru"):
+    def decode(self, knowledge_rep, masks, size, model_type="gru"):
         """
         takes in a knowledge representation
         and output a probability estimation over
@@ -102,33 +105,27 @@ class Decoder(object):
         """
 
         with vs.variable_scope("decoder"):
-
+            # P is (batch_size, output_dim, hid_dim), reshape to (batch_size * output_dim, hid_dim)
+            rep_reshaped = tf.reshape(knowledge_rep, [-1, size])
             with vs.variable_scope("answer_start"):
-                # P is (batch_size, output_dim, hid_dim), reshape to (batch_size * output_dim, hid_dim)
-                rep_reshaped = tf.reshape(knowledge_rep, [-1, self.hidden_size])
                 # weights W = (hid_dim, 1)
                 start_probs = tf.nn.rnn_cell._linear(rep_reshaped, output_size=1, bias=True)
                 # P is now (batch_size * output_dim, 1), so reshape to get start_probs
                 start_probs = tf.reshape(start_probs, [-1, self.output_size])
 
             with vs.variable_scope("answer_end"):
-                cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
-                cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
-                all_end_probs, _ = tf.nn.dynamic_rnn(cell, knowledge_rep, sequence_length=masks, dtype=tf.float32)
-
-                # do same trick as above on LSTM output to get end_probs
-                all_end_probs_reshaped = tf.reshape(all_end_probs, [-1, self.hidden_size])
-                end_probs = tf.nn.rnn_cell._linear(all_end_probs_reshaped, output_size=1, bias=True)
+                end_probs = tf.nn.rnn_cell._linear(rep_reshaped, output_size=1, bias=True)
                 end_probs = tf.reshape(end_probs, [-1, self.output_size])
 
             # Masking
             bool_masks = tf.cast(tf.sequence_mask(masks, maxlen=self.output_size), tf.float32)
             add_mask = (-1e30 * (1.0 - bool_masks))
-            #add_mask = tf.log(bool_masks)
+            # add_mask = tf.log(bool_masks)
             start_probs = tf.add(start_probs, add_mask)
             end_probs = tf.add(end_probs, add_mask)
 
         return start_probs, end_probs
+
 
 class QASystem(object):
     def __init__(self, pretrained_embeddings, flags):
@@ -145,12 +142,11 @@ class QASystem(object):
         self.embed_size = self.flags.embedding_size
 
         self.encoder = Encoder(hidden_size=self.h_size,
-                               dropout=(1.0-self.flags.dropout))
+                               dropout=(1.0 - self.flags.dropout))
 
         self.decoder = Decoder(hidden_size=self.h_size,
                                output_size=self.p_size,
-                               dropout=(1.0-self.flags.dropout))
-
+                               dropout=(1.0 - self.flags.dropout))
 
         # ==== set up placeholder tokens ========
 
@@ -178,7 +174,7 @@ class QASystem(object):
         #                                    1000, 0.96, staircase=True)
 
         self.optimizer = get_optimizer("adam")
-        
+
         if self.flags.grad_clip:
             # gradient clipping
             self.optimizer = self.optimizer(self.learning_rate)
@@ -190,7 +186,6 @@ class QASystem(object):
         else:
             # no gradient clipping
             self.train_op = self.optimizer(self.learning_rate).minimize(self.loss, global_step=self.global_step)
-
 
     def pad(self, sequence, max_length):
         # assumes sequence is a list of lists of word, pads to the longest "sentence"
@@ -204,31 +199,125 @@ class QASystem(object):
             padded_sequence.append(sentence)
         return (padded_sequence, mask)
 
-    def mixer(self, q_states, ctx_states):
-        # Compute attention of each context word representation with respect to the question final hidden states
+    # Compute relevancy matrix to determine how relevant each word in paragraph is to each word in question.
+    # Then filter the paragraph word embeddings on relevancy
+    def filter(self, Q, P):
+        with vs.variable_scope("filter"):
+            # Q is (batch_size, q_size, embed_size)
+            # P is (batch_size, p_size, embed_size)
+
+            # normalize all embeddings to unit norm so that dot product is cosine similarity
+            Qn = tf.nn.l2_normalize(Q, dim=2)
+            Pn = tf.nn.l2_normalize(P, dim=2)
+
+            # R is shape (batch_size, q_size, p_size), R_ij = q_i dot p_j
+            R = batch_matmul(Qn, tf.transpose(Pn, perm=[0, 2, 1]))
+
+            # collect maximum relevancy over the questions per paragraph word, shape (batch_size, p_size)
+            r = tf.reduce_max(R, axis=1)
+            r = tf.expand_dims(r, axis=2) # shape (batch_size, p_size, 1) to take advantage of broadcasting
+
+            # re-weight paragraph embeddings with relevancy scores
+            P_filtered = P * r
+
+            return P_filtered
+
+    # Takes in forward and backward encodings of question and passage and computes the matching vectors
+    def matching_layer(self, Q_fw, Q_bw, P_fw, P_bw, num_perspectives):
+        with vs.variable_scope("matching"):
+
+            # collect all matching vectors into this array, then concatenate at the end
+            M = []
+
+            # full-matching
+            W_1 = tf.get_variable("W_1", shape=(num_perspectives, self.h_size),
+                                  initializer=tf.contrib.layers.xavier_initializer())
+
+            W_2 = tf.get_variable("W_2", shape=(num_perspectives, self.h_size),
+                                  initializer=tf.contrib.layers.xavier_initializer())
+
+            Q_fw_final = Q_fw[:, -1, :]
+            Q_bw_final = Q_bw[:, -1, :]
+
+            # compute matching vectors between P_fw and Q_fw_final
+
+            # use broadcasting to get all hadamard products [(W1 * P_fw1), ..., ]
+            P_fw_e = tf.expand_dims(P_fw, axis=2) # shape (batch_size, p_size, 1, hid_dim)
+            W_1_e = tf.expand_dims(W_1, axis=0)
+            W_1_e_e = tf.expand_dims(W_1_e, axis=0) # shape (1, 1, num_perspectives, hid_dim)
+            X = W_1_e_e * P_fw_e
+
+            # use broadcasting to get hadamard product (W1 * Q_fw_final)
+            Q_fw_final_e = tf.expand_dims(Q_fw_final, axis=1) # shape (batch_size, 1, hid_dim)
+            Y = W_1_e * Q_fw_final_e
+            Y = tf.expand_dims(Y, axis=1)
+
+            # X is shape (batch_size, p_size, num_perspectives, hid_dim)
+            # Y is shape (batch_size, 1, num_perspectives, hid_dim)
+
+            # normalize them and then take dot products to get desired similarities
+            Xn = tf.nn.l2_normalize(X, dim=3)
+            Yn = tf.nn.l2_normalize(Y, dim=3)
+            M_full_fw = tf.reduce_sum(Xn * Yn, axis=3) # shape (batch_size, p_size, num_perspectives)
+            M.append(M_full_fw)
+
+            # use broadcasting to get all hadamard products [(W2 * P_bw1), ..., ]
+            P_bw_e = tf.expand_dims(P_bw, axis=2) # shape (batch_size, p_size, 1, hid_dim)
+            W_2_e = tf.expand_dims(W_2, axis=0)
+            W_2_e_e = tf.expand_dims(W_2_e, axis=0) # shape (1, 1, num_perspectives, hid_dim)
+            X = W_2_e_e * P_bw_e
+
+            # use broadcasting to get hadamard product (W1 * Q_fw_final)
+            Q_bw_final_e = tf.expand_dims(Q_bw_final, axis=1) # shape (batch_size, 1, hid_dim)
+            Y = W_2_e * Q_bw_final_e
+            Y = tf.expand_dims(Y, axis=1)
+
+            # X is shape (batch_size, p_size, num_perspectives, hid_dim)
+            # Y is shape (batch_size, 1, num_perspectives, hid_dim)
+
+            # normalize them and then take dot products to get desired similarities
+            Xn = tf.nn.l2_normalize(X, dim=3)
+            Yn = tf.nn.l2_normalize(Y, dim=3)
+            M_full_bw = tf.reduce_sum(Xn * Yn, axis=3) # shape (batch_size, p_size, num_perspectives)
+            M.append(M_full_bw)
+
+            # TODO: the other types of matching
+
+            # # maxpooling-matching
+            # W_3 = tf.get_variable("W_3", shape=(num_perspectives, self.h_size),
+            #                       initializer=tf.contrib.layers.xavier_initializer())
+            #
+            # W_4 = tf.get_variable("W_4", shape=(num_perspectives, self.h_size),
+            #                       initializer=tf.contrib.layers.xavier_initializer())
+            #
+            # # meanpooling-matching
+            # W_5 = tf.get_variable("W_5", shape=(num_perspectives, self.h_size),
+            #                       initializer=tf.contrib.layers.xavier_initializer())
+            #
+            # W_6 = tf.get_variable("W_6", shape=(num_perspectives, self.h_size),
+            #                       initializer=tf.contrib.layers.xavier_initializer())
 
 
-        with vs.variable_scope("mixer"):
-            # to calculate affinity matrix, need P * Q^T
-            # P is shape (?, max_p_len, hid_size), Q is shape (?, max_q_len, hid_size)
-            # A will be shape (?, max_p_len, max_q_len)
-            A = tf.nn.softmax(batch_matmul(ctx_states, tf.transpose(q_states, perm=[0, 2, 1])))
+            M = tf.concat(2, M) # concatenate along last dimension (num_perspectives)
+            return M
 
-            # C_P is shape (?, max_p_len, hid_size) = lin. comb. of weights from A over question states
-            # These are the context vectors.
-            C_P = batch_matmul(A, q_states)
 
-            # First, reshape both C_P and P to make them 2-D
-            C_P = tf.reshape(C_P, [-1, self.h_size])
-            P = tf.reshape(ctx_states, [-1, self.h_size])
+    def aggregation_layer(self, M, masks, size):
+        with tf.variable_scope("aggregation"):
+            cell_fw = tf.nn.rnn_cell.BasicLSTMCell(size)
+            cell_bw = tf.nn.rnn_cell.BasicLSTMCell(size)
 
-            # Next, use a linear layer to concatenate them along hid_size, and apply a weight matrix
-            P_final = tf.nn.rnn_cell._linear([C_P, P], output_size=self.h_size, bias=True)
+            cell_fw = tf.nn.rnn_cell.DropoutWrapper(cell_fw, output_keep_prob=(1.0-self.flags.dropout))
+            cell_bw = tf.nn.rnn_cell.DropoutWrapper(cell_bw, output_keep_prob=(1.0-self.flags.dropout))
 
-            # Finally, reshape the output to the correct shape
-            P_final = tf.reshape(P_final, [-1, self.p_size, self.h_size])
+            outputs, final_state = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, M,
+                                                                   sequence_length=masks,
+                                                                   dtype=tf.float32)
 
-            return P_final
+            # concatenate along hidden_dim, axis 2
+            concat_states = tf.concat(2, outputs)
+
+            return concat_states
 
     def setup_system(self):
         """
@@ -238,26 +327,51 @@ class QASystem(object):
         :return:
         """
 
-        # note that we reuse the SAME encoder for both question and paragraph
+        # first filter paragraph embeddings on relevancy
+        P_filtered = self.filter(Q=self.question_embeddings,
+                                 P=self.context_embeddings)
+
+
+        # note that we reuse the SAME encoder for both question and paragraph (same bi-LSTM)
         question_states, final_question_state = self.encoder.encode(self.question_embeddings,
                                                                     self.mask_q_placeholder,
                                                                     attention_inputs=None,
                                                                     model_type=self.flags.model_type,
                                                                     reuse=False)
+        # unpack forward and backward hidden states
+        question_states_fw, question_states_bw = question_states
 
-        ctx_states, final_ctx_state = self.encoder.encode(self.context_embeddings,
+        ctx_states, final_ctx_state = self.encoder.encode(P_filtered,
                                                           self.mask_ctx_placeholder,
                                                           attention_inputs=None,
                                                           model_type=self.flags.model_type,
                                                           reuse=True)
 
-        feed_states = self.mixer(q_states=question_states,
-                                 ctx_states=ctx_states)
+        # unpack forward and backward hidden states
+        ctx_states_fw, ctx_states_bw = ctx_states
+
+        # matching vectors, shape (batch_size, p_size, 2 * num_perspectives)
+        M = self.matching_layer(Q_fw=question_states_fw,
+                                Q_bw=question_states_bw,
+                                P_fw=ctx_states_fw,
+                                P_bw=ctx_states_bw,
+                                num_perspectives=self.flags.num_perspectives)
+        #M = ctx_states_fw
+
+        # aggregation output vectors, shape (batch_size, p_size, 4 * num_perspectives)
+        A = self.aggregation_layer(M=M,
+                                   masks=self.mask_ctx_placeholder,
+                                   #size=self.h_size)
+                                   size=2 * self.flags.num_perspectives)
+
+
 
         # decoder takes encoded representation to probability dists over start / end index
-        self.start_probs, self.end_probs = self.decoder.decode(knowledge_rep=feed_states,
+        self.start_probs, self.end_probs = self.decoder.decode(knowledge_rep=A,
                                                                masks=self.mask_ctx_placeholder,
-                                                               model_type=self.flags.model_type)
+                                                               model_type=self.flags.model_type,
+                                                               #size=2 * self.h_size)
+                                                               size=4 * self.flags.num_perspectives)
 
     def setup_loss(self):
         """
@@ -274,12 +388,11 @@ class QASystem(object):
         :return:
         """
         with vs.variable_scope("embeddings"):
-            embeddings = tf.Variable(self.pretrained_embeddings, name='embedding', dtype=tf.float32, trainable=False) #only learn one common embedding
+            embeddings = tf.Variable(self.pretrained_embeddings, name='embedding', dtype=tf.float32, trainable=False)  # only learn one common embedding
 
             self.question_embeddings = tf.nn.embedding_lookup(embeddings, self.question_placeholder)
 
             self.context_embeddings = tf.nn.embedding_lookup(embeddings, self.context_placeholder)
-
 
     def optimize(self, session, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch):
         """
@@ -293,7 +406,7 @@ class QASystem(object):
         # input_feed['train_x'] = train_x
 
         # TODO: should we do np.map(np.array()) here???????
- 
+
         input_feed[self.context_placeholder] = context_batch
         input_feed[self.question_placeholder] = question_batch
         input_feed[self.mask_ctx_placeholder] = mask_ctx_batch
@@ -345,10 +458,8 @@ class QASystem(object):
         input_feed[self.mask_q_placeholder] = mask_q_batch
         input_feed[self.dropout_placeholder] = self.flags.dropout
 
-
         output_feed = [self.start_probs, self.end_probs]
 
-        
         outputs = session.run(output_feed, input_feed)
 
         return outputs
@@ -412,9 +523,10 @@ class QASystem(object):
             sampled = dataset
             sample = len(dataset[0])
         else:
-            #np.random.seed(0)
+            # np.random.seed(0)
             inds = np.random.choice(len(dataset[0]), sample)
             sampled = [elem[inds] for elem in dataset]
+            context = [context[i] for i in inds]
 
         a_s, a_e = self.answer(session, sampled)
 
@@ -424,8 +536,8 @@ class QASystem(object):
         em = []
         # #embed()
         for i in range(len(sampled[0])):
-            pred_words=' '.join(context[i][a_s[i]:a_e[i]+1])
-            actual_words=' '.join(context[i][answer_spans[i][0]:answer_spans[i][1]+1])
+            pred_words = ' '.join(context[i][a_s[i]:a_e[i] + 1])
+            actual_words = ' '.join(context[i][answer_spans[i][0]:answer_spans[i][1] + 1])
             f1.append(f1_score(pred_words, actual_words))
             cur_em = exact_match_score(pred_words, actual_words)
             em.append(float(cur_em))
@@ -443,7 +555,7 @@ class QASystem(object):
             prog_train.update(i + 1, [("train loss", loss)])
         print("")
 
-        #if self.flags.debug == 0:
+        # if self.flags.debug == 0:
         prog_val = Progbar(target=1 + int(len(val_set[0]) / self.flags.batch_size))
         for i, batch in enumerate(self.minibatches(val_set, self.flags.batch_size)):
             val_loss = self.validate(sess, *batch)
@@ -463,8 +575,8 @@ class QASystem(object):
                              sample=None,
                              log=True,
                              eval_set="-Epoch VAL-")
-            # train_f1, train_em = self.evaluate_answer(sess,train_set, context=context[0], sample=100, log=True, eval_set="-Epoch TRAIN-")
-            # val_f1, val_em = self.evaluate_answer(sess,val_set, context=context[1], sample=100, log=True, eval_set="-Epoch VAL-")
+        # train_f1, train_em = self.evaluate_answer(sess,train_set, context=context[0], sample=100, log=True, eval_set="-Epoch TRAIN-")
+        # val_f1, val_em = self.evaluate_answer(sess,val_set, context=context[1], sample=100, log=True, eval_set="-Epoch VAL-")
 
     def train(self, session, saver, dataset, val_dataset, train_dir):
         """
@@ -502,26 +614,26 @@ class QASystem(object):
         toc = time.time()
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
 
-        context_ids, question_ids, answer_spans, ctx_mask ,q_mask, train_context = dataset
-        train_dataset = [context_ids, question_ids, answer_spans, ctx_mask ,q_mask]
-        #train_dataset = [np.array(col) for col in zip(*train_dataset)]
+        context_ids, question_ids, answer_spans, ctx_mask, q_mask, train_context = dataset
+        train_dataset = [context_ids, question_ids, answer_spans, ctx_mask, q_mask]
+        # train_dataset = [np.array(col) for col in zip(*train_dataset)]
 
         val_context_ids, val_question_ids, val_answer_spans, val_ctx_mask, val_q_mask, val_context = val_dataset
         val_dataset = [val_context_ids, val_question_ids, val_answer_spans, val_ctx_mask, val_q_mask]
-        #val_dataset = [np.array(col) for col in zip(*val_dataset)]
-        
+        # val_dataset = [np.array(col) for col in zip(*val_dataset)]
+
         num_epochs = self.flags.epochs
 
         if self.flags.debug:
             train_dataset = [elem[:self.flags.batch_size] for elem in train_dataset]
             val_dataset = [elem[:self.flags.batch_size] for elem in val_dataset]
             num_epochs = 100
-            #num_epochs = 1
+            # num_epochs = 1
 
         for epoch in range(num_epochs):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
             self.run_epoch(sess=session,
-                           train_set=train_dataset, 
+                           train_set=train_dataset,
                            val_set=val_dataset,
                            train_context=train_context,
                            val_context=val_context)

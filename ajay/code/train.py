@@ -17,9 +17,9 @@ from IPython import embed
 
 logging.basicConfig(level=logging.INFO)
 
-tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")
+tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
-tf.app.flags.DEFINE_float("dropout", 0.10, "Fraction of units randomly dropped on non-recurrent connections.") # 0.15
+tf.app.flags.DEFINE_float("dropout", 0.20, "Fraction of units randomly dropped on non-recurrent connections.") # 0.15
 tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
@@ -40,6 +40,7 @@ tf.app.flags.DEFINE_string("model_type", "lstm", "specify either gru or lstm cel
 tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
 tf.app.flags.DEFINE_integer("grad_clip", 0, "whether to clip gradients or not")
 tf.app.flags.DEFINE_integer("question_size", 60, "The question size of your model.") # 60
+tf.app.flags.DEFINE_integer("num_perspectives", 10, "Number of perspectives.") # 60
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -205,14 +206,14 @@ def main(_):
     val_ctx_mask = np.array(val_ctx_mask)
     val_q_mask = np.array(val_q_mask)
     
-    check_pad(context_ids, ctx_mask)
-    print("CONTEXT IDS PADDED AND CHECKED")
-    check_pad(question_ids, q_mask)
-    print("QUESTION IDS PADDED AND CHECKED")
-    check_pad(val_context_ids, val_ctx_mask)
-    print("VAL CONTEXT IDS PADDED AND CHECKED")
-    check_pad(val_question_ids, val_q_mask)
-    print("VAL QUESTION IDS PADDED AND CHECKED")
+    # check_pad(context_ids, ctx_mask)
+    # print("CONTEXT IDS PADDED AND CHECKED")
+    # check_pad(question_ids, q_mask)
+    # print("QUESTION IDS PADDED AND CHECKED")
+    # check_pad(val_context_ids, val_ctx_mask)
+    # print("VAL CONTEXT IDS PADDED AND CHECKED")
+    # check_pad(val_question_ids, val_q_mask)
+    # print("VAL QUESTION IDS PADDED AND CHECKED")
 
     dataset=[context_ids,question_ids,answer_spans,ctx_mask,q_mask,context]
     val_dataset=[val_context_ids,val_question_ids,val_answer_spans,val_ctx_mask,val_q_mask,val_context]
