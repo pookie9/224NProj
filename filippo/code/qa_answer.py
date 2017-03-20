@@ -21,17 +21,19 @@ import qa_data
 
 import logging
 
+from IPython import embed
+
 logging.basicConfig(level=logging.INFO)
 
 FLAGS = tf.app.flags.FLAGS
 
-tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
+tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")
 tf.app.flags.DEFINE_float("dropout", 0.10, "Fraction of units randomly dropped on non-recurrent connections.")
-tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
-tf.app.flags.DEFINE_integer("epochs", 0, "Number of epochs to train.")
+tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use during training.")
+tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
-tf.app.flags.DEFINE_integer("output_size", 500, "The output size of your model.")
+tf.app.flags.DEFINE_integer("output_size", 400, "The output size of your model.")
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory (default: ./train).")
 tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (default: ./log)")
@@ -43,7 +45,7 @@ tf.app.flags.DEFINE_string("dev_path", "data/squad/dev-v1.1.json", "Path to the 
 tf.app.flags.DEFINE_string("model_type", "lstm", "specify either gru or lstm cell type for encoding")
 tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
 tf.app.flags.DEFINE_integer("grad_clip", 0, "whether to clip gradients or not")
-tf.app.flags.DEFINE_integer("question_size", 60, "The question size of your model.") # 60
+tf.app.flags.DEFINE_integer("question_size", 40, "The question size of your model.") # 60
 
 
 def initialize_model(session, model, train_dir):
@@ -179,7 +181,7 @@ def pad(sequence, max_length):
     mask = []    
     for sentence in sequence:
         sentence=map(int,sentence.strip().split())
-        mask.append(len(sentence))
+        mask.append(min(len(sentence),max_length))
         sentence.extend([PAD_ID] * (max_length - len(sentence)))
         padded_sequence.append(sentence)
     return (padded_sequence, mask)
@@ -206,20 +208,21 @@ def main(_):
     dev_dirname = os.path.dirname(os.path.abspath(FLAGS.dev_path))
     dev_filename = os.path.basename(FLAGS.dev_path)
     context_data, question_data, question_uuid_data = prepare_dev(dev_dirname, dev_filename, vocab)
+
     context_ids, ctx_mask = pad(context_data, FLAGS.output_size)
     question_ids, q_mask = pad(question_data, FLAGS.question_size)
-    #dataset = (context_data, question_data, question_uuid_data)
-    paragraph_lengths=[]
+
     for i in range(0, len(context_ids)):
-        paragraph_lengths.append(len(context_ids[i]))
         context_ids[i] = context_ids[i][:FLAGS.output_size]
-        question_ids[i] = question_ids[i][:FLAGS.question_size]
+    for j in range(0,len(question_ids)):
+        question_ids[j] = question_ids[j][:FLAGS.question_size]
+
     
     context_ids=np.array(context_ids)
     question_ids=np.array(question_ids)
     ctx_mask=np.array(ctx_mask)
     q_mask=np.array(q_mask)
-    answer_span=np.array([(0,0)]*len(context_ids))#Need this because minibatches is expecting it this way
+    answer_span=np.array([(0,0)]*len(context_ids)) #Need this because minibatches is expecting it this way
     dataset=[context_ids,question_ids,answer_span,ctx_mask,q_mask,question_uuid_data]
     embeddings=initialize_embeddings(embed_path)
     # ========= Model-specific =========

@@ -276,7 +276,6 @@ class QASystem(object):
             embeddings = tf.Variable(self.pretrained_embeddings, name='embedding', dtype=tf.float32, trainable=False) #only learn one common embedding
 
             self.question_embeddings = tf.nn.embedding_lookup(embeddings, self.question_placeholder)
-
             self.context_embeddings = tf.nn.embedding_lookup(embeddings, self.context_placeholder)
 
 
@@ -338,6 +337,8 @@ class QASystem(object):
         """
         input_feed = {}
 
+        #print(len(question_batch),len(question_batch[0])," ",len(context_batch),len(context_batch[0])," ", mask_ctx_batch[0], " ",mask_q_batch[0])
+
         input_feed[self.context_placeholder] = context_batch
         input_feed[self.question_placeholder] = question_batch
         input_feed[self.mask_ctx_placeholder] = mask_ctx_batch
@@ -346,9 +347,11 @@ class QASystem(object):
 
 
         output_feed = [self.start_probs, self.end_probs]
-
-        
+        # try:
         outputs = session.run(output_feed, input_feed)
+        # except:
+        #     embed()
+        #     assert(False)
 
         return outputs
 
@@ -515,7 +518,7 @@ class QASystem(object):
         if self.flags.debug:
             train_dataset = [elem[:self.flags.batch_size*1] for elem in train_dataset]
             val_dataset = [elem[:self.flags.batch_size] for elem in val_dataset]
-            num_epochs = 1
+            num_epochs = 5
             #num_epochs = 1
 
         for epoch in range(num_epochs):
