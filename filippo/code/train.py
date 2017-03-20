@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.10, "Fraction of units randomly dropped on non-recurrent connections.") # 0.15
-tf.app.flags.DEFINE_integer("batch_size", 1, "Batch size to use during training.")
+tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("output_size", 300, "The output size of your model.") #766 #600
@@ -189,10 +189,15 @@ def main(_):
 
     assert max_ctx_len==FLAGS.output_size, "MISMATCH BETWEEN MAX_CTX_LEN AND FLAGS.OUTPUT_SIZE: "+str(max_ctx_len)+", "+str(FLAGS.output_size)
 
-    context_ids, ctx_mask = pad(context_ids, FLAGS.output_size)
-    question_ids, q_mask = pad(question_ids, FLAGS.question_size)
-    val_context_ids, val_ctx_mask = pad(val_context_ids, FLAGS.output_size)
-    val_question_ids, val_q_mask = pad(val_question_ids, FLAGS.question_size)
+    # context_ids, ctx_mask = pad(context_ids, FLAGS.output_size)
+    # question_ids, q_mask = pad(question_ids, FLAGS.question_size)
+    # val_context_ids, val_ctx_mask = pad(val_context_ids, FLAGS.output_size)
+    # val_question_ids, val_q_mask = pad(val_question_ids, FLAGS.question_size)
+
+    context_ids, ctx_mask = pad(context_ids, max_ctx_len)
+    question_ids, q_mask = pad(question_ids, max_q_len)
+    val_context_ids, val_ctx_mask = pad(val_context_ids, max_ctx_len)
+    val_question_ids, val_q_mask = pad(val_question_ids, max_q_len)
 
     context_ids = np.array(context_ids)
     question_ids = np.array(question_ids)

@@ -41,7 +41,7 @@ class Encoder(object):
         self.hidden_size = hidden_size
         self.dropout = dropout
 
-    def encode(self, inputs, masks, attention_inputs=None, model_type="gru", name="encoder", reuse=False):
+    def encode(self, inputs, masks, attention_inputs=None, initial_state=None,model_type="gru", name="encoder", reuse=False):
         """
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
@@ -75,6 +75,8 @@ class Encoder(object):
             cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
             outputs, final_state = tf.nn.bidirectional_dynamic_rnn(cell, cell, inputs,
                                                                    sequence_length=masks,
+                                                                   initial_state_fw=initial_state,
+                                                                   initial_state_bw=initial_state,
                                                                    dtype=tf.float32)
 
             # add forward and backward hidden states together
@@ -242,13 +244,14 @@ class QASystem(object):
                                                                     self.mask_q_placeholder,
                                                                     attention_inputs=None,
                                                                     model_type=self.flags.model_type,
-                                                                    reuse=False)
+                                                                    reuse=False,name='q_encoder')
 
         ctx_states, final_ctx_state = self.encoder.encode(self.context_embeddings,
                                                           self.mask_ctx_placeholder,
                                                           attention_inputs=None,
+                                                          initial_state=final_question_state[-1],
                                                           model_type=self.flags.model_type,
-                                                          reuse=True)
+                                                          reuse=False, name='ctx_encoder')
 
         feed_states = self.mixer(q_states=question_states,
                                  ctx_states=ctx_states)
@@ -424,7 +427,6 @@ class QASystem(object):
         f1 = []
         em = []
         # #embed()
-        print (list(answer_spans))
         for i in range(len(sampled[0])):
             pred_words=' '.join(context[i][a_s[i]:a_e[i]+1])
             actual_words=' '.join(context[i][answer_spans[i][0]:answer_spans[i][1]+1])
