@@ -122,7 +122,7 @@ class MatchLSTMCell(tf.nn.rnn_cell.BasicLSTMCell):
     def __init__(self, num_units, encoder_output, scope=None):
         # shape (batch_size, Nq, hid_dim), these are question encodings
         self.attn_states = encoder_output
-        self.q_size = int(self.attn_states.get_shape()[1]) # convert from Dimension type to int
+        self.p_size = self.attn_states.get_shape()[1]
 
         super(MatchLSTMCell, self).__init__(num_units)
 
@@ -130,25 +130,23 @@ class MatchLSTMCell(tf.nn.rnn_cell.BasicLSTMCell):
     def __call__(self, inputs, state, scope=None):
         with vs.variable_scope(scope or type(self).__name__):
 
-            with vs.variable_scope("ParAttn"):
+            with vs.variable_scope("Attn"):
                 par_attn = tf.nn.rnn_cell._linear([inputs, state[-1]], self._num_units, True, 1.0)
 
-            with vs.variable_scope("QuesAttn"):
                 # hit attention_states with a weight matrix (3d * 2d)
                 attn_states_reshaped = tf.reshape(self.attn_states, [-1, self._num_units])
                 ques_attn = tf.nn.rnn_cell._linear(attn_states_reshaped, output_size=self._num_units, bias=True)
-                ques_attn = tf.reshape(ques_attn, [-1, self.q_size, self._num_units])
+                ques_attn = tf.reshape(ques_attn, [-1, self.p_size, self._num_units])
 
                 # use expand_dims with broadcasting, this is shape [?, 1, hidden_size] now
                 par_attn = tf.expand_dims(par_attn, 1)
 
                 g_i = tf.nn.tanh(ques_attn + par_attn)
 
-            with vs.variable_scope("Scores"):
-                g_i_r = tf.reshape(g_i, [-1, self._num_units])
-                scores = tf.nn.rnn_cell._linear(g_i_r, output_size=1, bias=True)
-                scores = tf.reshape(scores, [-1, self.q_size])
-                scores = tf.nn.softmax(scores)
+            g_i_r = tf.reshape(g_i, [-1, self._num_units])
+            scores = tf.nn.rnn_cell._linear(g_i_r, output_size=1, bias=True)
+            scores = tf.reshape(scores, [-1, self.p_size])
+            scores = tf.nn.softmax(scores)
 
             # do a softmax over the scores
             # scores = tf.exp(scores - tf.reduce_max(scores, reduction_indices=1, keep_dims=True))
@@ -157,7 +155,6 @@ class MatchLSTMCell(tf.nn.rnn_cell.BasicLSTMCell):
             # compute context vector using linear combination of attention states with
             # weights given by attention vector.
             # context is shape (batch_size, hid_dim)
-            scores = tf.expand_dims(scores, 2)
             context = tf.reduce_sum(g_i * scores, reduction_indices=1)
 
             z = tf.concat(1, [inputs, context])
@@ -450,7 +447,7 @@ class QASystem(object):
 
 
         # decoder takes encoded representation to probability dists over start / end index
-        self.start_probs, self.end_probs = self.decoder.decode(knowledge_rep=match_states,
+        self.start_probs, self.end_probs = self.decoder.decode(knowledge_rep=feed_states,
                                                                masks=self.mask_ctx_placeholder)
 
 
@@ -460,8 +457,11 @@ class QASystem(object):
         :return:
         """
         with vs.variable_scope("loss"):
-            self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs, self.answer_span_placeholder[:, 0])) + \
-                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs,self.answer_span_placeholder[:, 1]))
+            self.loss = tf.reduce_mean(
+                tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs, self.answer_span_placeholder[:, 0])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs,
+                                                                                      self.answer_span_placeholder[:,
+                                                                                      1]))
 
     def setup_embeddings(self):
         """
