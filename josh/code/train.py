@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO)
 tf.app.flags.DEFINE_float("learning_rate", 0.002, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.10, "Fraction of units randomly dropped on non-recurrent connections.") # 0.15
-tf.app.flags.DEFINE_integer("batch_size", 50, "Batch size to use during training.")
+tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("output_size", 400, "The output size of your model.") #766 #600
@@ -39,10 +39,11 @@ tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embeddin
 
 # added
 tf.app.flags.DEFINE_string("model_type", "lstm", "specify either gru or lstm cell type for encoding")
-tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
+tf.app.flags.DEFINE_integer("debug", 1, "whether to set debug or not")
 tf.app.flags.DEFINE_integer("grad_clip", 0, "whether to clip gradients or not")
 tf.app.flags.DEFINE_integer("question_size", 60, "The question size of your model.") # 60
 tf.app.flags.DEFINE_integer("num_perspectives", 10, "Number of perspectives.") # 60
+tf.app.flags.DEFINE_string("run_name", "stacked_encoder_decoder", "Name to save the .ckpt file") # 60
 
 
 FLAGS = tf.app.flags.FLAGS

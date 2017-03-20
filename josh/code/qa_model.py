@@ -41,7 +41,7 @@ class Encoder(object):
         self.hidden_size = hidden_size
         self.dropout = dropout
 
-    def encode(self, inputs, masks, attention_inputs=None, initial_state=None,model_type="gru", name="encoder", reuse=False):
+    def encode(self, inputs, masks, attention_inputs=None, initial_state=(None,None),initial_state_bw=None,model_type="gru", name="encoder", reuse=False):
         """
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
@@ -71,12 +71,12 @@ class Encoder(object):
                     raise Exception('Must specify model type.')
             else:
                 raise Exception("Attention not implemented.")
-
+            
             cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
             outputs, final_state = tf.nn.bidirectional_dynamic_rnn(cell, cell, inputs,
                                                                    sequence_length=masks,
-                                                                   initial_state_fw=initial_state,
-                                                                   initial_state_bw=initial_state,
+                                                                   initial_state_fw=initial_state[0],
+                                                                   initial_state_bw=initial_state[1],
                                                                    dtype=tf.float32)
 
             # add forward and backward hidden states together
@@ -90,7 +90,7 @@ class Decoder(object):
         self.output_size = output_size
         self.dropout = dropout
 
-    def decode(self, knowledge_rep, masks, model_type="gru"):
+    def decode(self, knowledge_rep, masks, model_type="gru",initial_state=(None,None)):
         """
         takes in a knowledge representation
         and output a probability estimation over
@@ -104,11 +104,19 @@ class Decoder(object):
         """
 
         with vs.variable_scope("decoder"):
-
+            #initial_state=(None,None)
             with vs.variable_scope("answer_start"):
                 cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
                 cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
-                start_states, start_final_state = tf.nn.dynamic_rnn(cell, knowledge_rep, sequence_length=masks, dtype=tf.float32)
+                
+                start_states, start_final_state = tf.nn.bidirectional_dynamic_rnn(cell, cell, knowledge_rep,
+                                                                                  sequence_length=masks,
+                                                                                  initial_state_fw=initial_state[0],
+                                                                                  initial_state_bw=initial_state[1],
+                                                                                  dtype=tf.float32)
+                start_states=start_states[0]+start_states[1]
+                
+                #start_states, start_final_state = tf.nn.dynamic_rnn(cell, knowledge_rep, sequence_length=masks, dtype=tf.float32)
                 start_states_reshaped = tf.reshape(start_states, [-1, self.hidden_size])
                 start_probs = tf.nn.rnn_cell._linear(start_states_reshaped, output_size=1, bias=True)
                 start_probs = tf.reshape(start_probs, [-1, self.output_size])
@@ -117,7 +125,14 @@ class Decoder(object):
             with vs.variable_scope("answer_end"):
                 cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
                 cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
-                end_states, end_final_state = tf.nn.dynamic_rnn(cell, knowledge_rep,initial_state=start_final_state, sequence_length=masks, dtype=tf.float32)
+                end_states, end_final_state = tf.nn.bidirectional_dynamic_rnn(cell, cell, knowledge_rep,
+                                                                                  sequence_length=masks,
+                                                                                  initial_state_fw=start_final_state[0],
+                                                                                  initial_state_bw=start_final_state[1],
+                                                                                  dtype=tf.float32)
+
+                end_states=end_states[0]+end_states[1]
+                #end_states, end_final_state = tf.nn.dynamic_rnn(cell, knowledge_rep,initial_state=start_final_state, sequence_length=masks, dtype=tf.float32)
                 end_states_reshaped = tf.reshape(end_states, [-1, self.hidden_size])
                 end_probs = tf.nn.rnn_cell._linear(end_states_reshaped, output_size=1, bias=True)
                 end_probs = tf.reshape(end_probs, [-1, self.output_size])
@@ -249,7 +264,7 @@ class QASystem(object):
         ctx_states, final_ctx_state = self.encoder.encode(self.context_embeddings,
                                                           self.mask_ctx_placeholder,
                                                           attention_inputs=None,
-                                                          initial_state=final_question_state[-1],
+                                                          initial_state=final_question_state,
                                                           model_type=self.flags.model_type,
                                                           reuse=False, name='ctx_encoder')
 
@@ -259,7 +274,7 @@ class QASystem(object):
         # decoder takes encoded representation to probability dists over start / end index
         self.start_probs, self.end_probs = self.decoder.decode(knowledge_rep=feed_states,
                                                                masks=self.mask_ctx_placeholder,
-                                                               model_type=self.flags.model_type)
+                                                               model_type=self.flags.model_type, initial_state=final_question_state)
 
     def setup_loss(self):
         """
@@ -530,7 +545,7 @@ class QASystem(object):
                            train_context=train_context,
                            val_context=val_context)
             logging.info("Saving model in %s", train_dir)
-            self.saver.save(session, train_dir)
+            self.saver.save(session, train_dir+"/"+self.flags.run_name+".ckpt")
 
     def minibatches(self, data, batch_size, shuffle=True):
         num_data = len(data[0])
