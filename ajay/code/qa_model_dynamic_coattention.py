@@ -225,8 +225,9 @@ class QASystem(object):
         L = tf.batch_matmul(P, Q_t)
 
         # attention weights
-        AQ = tf.nn.softmax(L)
-        AD = tf.nn.softmax(tf.transpose(L, perm=[0, 2, 1]))
+        # TODO: this normalization might be wrong...
+        AQ = tf.nn.softmax(L, dim=1)
+        AD = tf.nn.softmax(tf.transpose(L, perm=[0, 2, 1]), dim=1)
 
         # attention contexts
         CQ = tf.batch_matmul(P_t, AQ)
@@ -292,6 +293,8 @@ class QASystem(object):
                                                           attention_inputs=None,
                                                           model_type=self.flags.model_type,
                                                           reuse=True)
+
+        # TODO: try changing reuse to False here
 
         sent_vec = tf.get_variable("p_sent", shape=(1, 1, self.h_size),
                                    initializer=tf.contrib.layers.xavier_initializer())

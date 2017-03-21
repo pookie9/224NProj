@@ -17,12 +17,12 @@ from IPython import embed
 
 logging.basicConfig(level=logging.INFO)
 
-tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.") # 0.001
+tf.app.flags.DEFINE_float("learning_rate", 0.0001, "Learning rate.") # 0.001
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.20, "Fraction of units randomly dropped on non-recurrent connections.") # 0.15
 tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
-tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.") # 100
+tf.app.flags.DEFINE_integer("state_size", 100, "Size of each model layer.") # 100
 tf.app.flags.DEFINE_integer("output_size", 600, "The output size of your model.") #766 #600
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
@@ -38,7 +38,9 @@ tf.app.flags.DEFINE_string("model_type", "lstm", "specify either gru or lstm cel
 tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
 tf.app.flags.DEFINE_integer("grad_clip", 0, "whether to clip gradients or not")
 tf.app.flags.DEFINE_integer("question_size", 60, "The question size of your model.") # 60
-tf.app.flags.DEFINE_integer("num_perspectives", 10, "Number of perspectives.") # 60
+tf.app.flags.DEFINE_integer("batch_norm", 1, "Toggle batch normalization")
+tf.app.flags.DEFINE_integer("anneal", 0, "Toggle lr annealing")
+tf.app.flags.DEFINE_integer("num_perspectives", 1, "Number of perspectives")
 
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
 tf.app.flags.DEFINE_string("load_train_dir", "", "Training directory to load model parameters from to resume training (default: {train_dir}).")
