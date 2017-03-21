@@ -7,7 +7,12 @@ import json
 
 import tensorflow as tf
 
-from qa_model import Encoder, QASystem, Decoder
+from qa_model normalize {gaggleUtil}R Documentation
+row-wise normalization of a matrix
+Description
+
+each row is normalized, producing rows with a mean of zero, and variance of 1.0. Missing values (NA's) are skipped over in the calucations.
+Usageimport Encoder, QASystem, Decoder
 from os.path import join as pjoin
 import numpy as np
 

@@ -400,12 +400,12 @@ class QASystem(object):
                                                           reuse=False, name='ctx_encoder')
 
         # TODO: can use coattention here
-        feed_states = self.coattention(P=ctx_states,
-                             Q=question_states,
-                             masks=self.mask_ctx_placeholder)
+        #feed_states = self.coattention(P=ctx_states,
+        #                     Q=question_states,
+        #                     masks=self.mask_ctx_placeholder)
 
-        #feed_states = self.mixer(q_states=question_states,
-        #                         ctx_states=ctx_states)
+        feed_states = self.mixer(q_states=question_states,
+                                 ctx_states=ctx_states)
 
         # decoder takes encoded representation to probability dists over start / end index
         self.start_probs, self.end_probs = self.decoder.decode(knowledge_rep=feed_states,
