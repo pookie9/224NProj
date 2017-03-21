@@ -329,8 +329,8 @@ class QASystem(object):
         L = tf.batch_matmul(P, Q_t)
 
         # attention weights
-        AQ = tf.nn.softmax(L)
-        AD = tf.nn.softmax(tf.transpose(L, perm=[0, 2, 1]))
+        AQ = tf.nn.softmax(L,dim=1)
+        AD = tf.nn.softmax(tf.transpose(L, perm=[0, 2, 1]),dim=1)
 
         # attention contexts
         CQ = tf.batch_matmul(P_t, AQ)
