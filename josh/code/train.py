@@ -246,7 +246,6 @@ def main(_):
         saver = tf.train.Saver()
 
         qa.train(session=sess,
-                 saver=saver,
                  dataset=dataset,
                  val_dataset=val_dataset,
                  train_dir=save_train_dir)

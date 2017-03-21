@@ -32,22 +32,6 @@ def get_optimizer(opt):
         assert (False)
     return optfn
 
-class BatchNormWrapper(RNNCell):
-  """Operator adding dropout to inputs and outputs of the given cell."""
-
-  def __init__(self, cell, gamma=None,beta=None,seed=None):
-    self._cell = cell
-    if gamma=None:
-        gamma=    tf.get_variable("gamma", self.input_size, )
-    self.gamma=gamma
-    self.beta=beta
-    
-
-  def __call__(self, inputs, state, scope=None):
-    """Run the cell with the declared dropouts."""
-    output, new_state = self._cell(inputs, state, scope)
-    return output, new_state
-
 class Encoder(object):
     """
     Arguments:
@@ -57,7 +41,7 @@ class Encoder(object):
         self.hidden_size = hidden_size
         self.dropout = dropout
 
-    def encode(self, inputs, masks, attention_inputs=None, initial_state=(None,None),initial_state_bw=None,model_type="gru", name="encoder", reuse=False):
+    def encode(self, inputs, masks, attention_inputs=None, initial_state=(None, None),model_type="gru", name="encoder", reuse=False):
         """
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
@@ -86,14 +70,20 @@ class Encoder(object):
                 else:
                     raise Exception('Must specify model type.')
             else:
-                raise Exception("Attention not implemented.")
+                assert(model_type == "lstm")
+                cell = LSTMAttnCell(self.hidden_size, attention_inputs)
             
             cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
+
+            # TODO: should we create two different LSTM cells here, one for fw, one for bw?
             outputs, final_state = tf.nn.bidirectional_dynamic_rnn(cell, cell, inputs,
                                                                    sequence_length=masks,
                                                                    initial_state_fw=initial_state[0],
                                                                    initial_state_bw=initial_state[1],
                                                                    dtype=tf.float32)
+
+            # TODO: try concatenating instead of adding
+            # final_outputs = tf.concat(2, outputs)
 
             # add forward and backward hidden states together
             final_outputs = outputs[0] + outputs[1]
@@ -106,7 +96,7 @@ class Decoder(object):
         self.output_size = output_size
         self.dropout = dropout
 
-    def decode(self, knowledge_rep, masks, model_type="gru",initial_state=(None,None)):
+    def decode(self, knowledge_rep, masks, initial_state=(None,None)):
         """
         takes in a knowledge representation
         and output a probability estimation over
@@ -175,6 +165,7 @@ class QASystem(object):
         self.p_size = self.flags.output_size
         self.q_size = self.flags.question_size
         self.embed_size = self.flags.embedding_size
+        self.dropout = self.flags.dropout
         self.encoder = Encoder(hidden_size=self.h_size,
                                dropout=(1.0-self.flags.dropout))
 
@@ -262,6 +253,7 @@ class QASystem(object):
 
             return P_final
 
+
     def setup_system(self):
         """
         After your modularized implementation of encoder and decoder
@@ -270,6 +262,11 @@ class QASystem(object):
         :return:
         """
 
+        # TODO: can use filter here
+        # # first filter paragraph embeddings on relevancy
+        # P_filtered = self.filter(Q=self.question_embeddings,
+        #                          P=self.context_embeddings)
+
         # note that we reuse the SAME encoder for both question and paragraph
         question_states, final_question_state = self.encoder.encode(self.question_embeddings,
                                                                     self.mask_q_placeholder,
@@ -277,12 +274,24 @@ class QASystem(object):
                                                                     model_type=self.flags.model_type,
                                                                     reuse=False,name='q_encoder')
 
+        # TODO: can update question encodings with tanh layer here
+        # question_states = tf.reshape(question_states, [-1, self.h_size])
+        # question_states = tf.nn.rnn_cell._linear(question_states, output_size=self.h_size, bias=True)
+        # question_states = tf.nn.tanh(tf.reshape(question_states, [-1, self.q_size + 1, self.h_size]))
+
+        # TODO: can use attention over the question here too (set attention_inputs)
         ctx_states, final_ctx_state = self.encoder.encode(self.context_embeddings,
                                                           self.mask_ctx_placeholder,
                                                           attention_inputs=None,
+                                                          # attention_inputs=question_states
                                                           initial_state=final_question_state,
                                                           model_type=self.flags.model_type,
                                                           reuse=False, name='ctx_encoder')
+
+        # TODO: can use coattention here
+        # U = self.coattention(P=ctx_states,
+        #                      Q=question_states,
+        #                      masks=self.mask_ctx_placeholder)
 
         feed_states = self.mixer(q_states=question_states,
                                  ctx_states=ctx_states)
@@ -290,7 +299,7 @@ class QASystem(object):
         # decoder takes encoded representation to probability dists over start / end index
         self.start_probs, self.end_probs = self.decoder.decode(knowledge_rep=feed_states,
                                                                masks=self.mask_ctx_placeholder,
-                                                               model_type=self.flags.model_type, initial_state=final_question_state)
+                                                                initial_state=final_question_state)
 
     def setup_loss(self):
         """
@@ -324,8 +333,6 @@ class QASystem(object):
 
         # fill in this feed_dictionary like:
         # input_feed['train_x'] = train_x
-
-        # TODO: should we do np.map(np.array()) here???????
  
         input_feed[self.context_placeholder] = context_batch
         input_feed[self.question_placeholder] = question_batch
@@ -385,20 +392,6 @@ class QASystem(object):
         outputs = session.run(output_feed, input_feed)
 
         return outputs
-    def answer_probs(self,session,data):
-        """Returns the start and end probabilities as numpy arrays of shape (num_question,max_context_length)"""
-                yp_lst = []
-        yp2_lst = []
-        prog_train = Progbar(target=1 + int(len(data[0]) / self.flags.batch_size))
-        for i, batch in enumerate(self.minibatches(data, self.flags.batch_size, shuffle=False)):
-            yp, yp2 = self.decode(session, *batch)
-            yp_lst.append(yp)
-            yp2_lst.append(yp2)
-            prog_train.update(i + 1, [(self.flags.run_name +" is Answering Questions",0.0)])
-        print("")
-        yp_all = np.concatenate(yp_lst, axis=0)
-        yp2_all = np.concatenate(yp2_lst, axis=0)
-        return (yp_all,yp2_all)
 
     def answer(self, session, data):
 
@@ -512,10 +505,8 @@ class QASystem(object):
                              sample=None,
                              log=True,
                              eval_set="-Epoch VAL-")
-            # train_f1, train_em = self.evaluate_answer(sess,train_set, context=context[0], sample=100, log=True, eval_set="-Epoch TRAIN-")
-            # val_f1, val_em = self.evaluate_answer(sess,val_set, context=context[1], sample=100, log=True, eval_set="-Epoch VAL-")
 
-    def train(self, session, saver, dataset, val_dataset, train_dir):
+    def train(self, session, dataset, val_dataset, train_dir):
         """
         Implement main training loop
 
