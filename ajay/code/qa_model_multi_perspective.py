@@ -344,7 +344,7 @@ class QASystem(object):
         # unpack forward and backward hidden states
         question_states_fw, question_states_bw = question_states
 
-        ctx_states, final_ctx_state = self.encoder.encode(self.context_embeddings,
+        ctx_states, final_ctx_state = self.encoder.encode(P_filtered,
                                                           self.mask_ctx_placeholder,
                                                           attention_inputs=None,
                                                           model_type=self.flags.model_type,
@@ -637,7 +637,7 @@ class QASystem(object):
                            train_context=train_context,
                            val_context=val_context)
             logging.info("Saving model in %s", train_dir)
-            self.saver.save(session, train_dir)
+            self.saver.save(session, train_dir + "/qa.ckpt")
 
     def minibatches(self, data, batch_size, shuffle=True):
         num_data = len(data[0])

@@ -21,7 +21,7 @@ from tensorflow.python.ops.gen_math_ops import _batch_mat_mul as batch_matmul
 logging.basicConfig(level=logging.INFO)
 
 
-### Match LSTM:
+### Dynamic Coattention (Full):
 
 def get_optimizer(opt):
     if opt == "adam":
@@ -32,151 +32,126 @@ def get_optimizer(opt):
         assert (False)
     return optfn
 
-class GRUAttnCell(tf.nn.rnn_cell.GRUCell):
+
+class DecoderCell(tf.nn.rnn_cell.BasicLSTMCell):
     """
     Arguments:
         -num_units: hidden state dimensions
         -encoder_output: hidden states to compute attention over
         -scope: lol who knows
     """
-    def __init__(self, num_units, encoder_output, scope=None):
-        # attn_states is shape (batch_size, N, hid_dim)
-        self.attn_states = encoder_output
-        super(GRUAttnCell, self).__init__(num_units)
+    def __init__(self, num_units, U, masks, scope=None):
+        # U is shape (batch_size, p_size, hid_dim)
+        self.U = U
+        U_shape = U.get_shape()
+        self.p_size = int(U_shape[1])
+        self.hid_dim = int(U_shape[2])
+        self.masks = masks # for masking the alpha and beta probability vectors
+
+        # the total state is dimension hid_size + 2 * p_size
+        super(DecoderCell, self).__init__(num_units)
+
+        #assert(self._num_units == self.hid_dim)
 
     def __call__(self, inputs, state, scope=None):
-        gru_out, gru_state = super(GRUAttnCell, self).__call__(inputs, state, scope)
-        with vs.variable_scope(scope or type(self).__name__):
-            # compute scores using hs.T * W * ht
-            with vs.variable_scope("Attn"):
-                # ht is shape (batch_size, hid_dim)
-                ht = tf.nn.rnn_cell._linear(gru_out, self._num_units, True, 1.0)
-
-                # ht is shape (batch_size, 1, hid_dim)
-                ht = tf.expand_dims(ht, axis=1)
-
-            # scores is shape (batch_size, N, 1)
-            scores = tf.reduce_sum(self.attn_states * ht, reduction_indices=2, keep_dims=True)
-
-            # do a softmax over the scores
-            scores = tf.exp(scores - tf.reduce_max(scores, reduction_indices=1, keep_dims=True))
-            scores = scores / (1e-6 + tf.reduce_sum(scores, reduction_indices=1, keep_dims=True))
-
-            # compute context vector using linear combination of attention states with
-            # weights given by attention vector.
-            # context is shape (batch_size, hid_dim)
-            context = tf.reduce_sum(self.attn_states * scores, reduction_indices=1)
-
-            with vs.variable_scope("AttnConcat"):
-                out = tf.nn.tanh(tf.nn.rnn_cell._linear([context, gru_out], self._num_units, True, 1.0))
-
-            return (out, gru_state)
-
-class LSTMAttnCell(tf.nn.rnn_cell.BasicLSTMCell):
-    """
-    Arguments:
-        -num_units: hidden state dimensions
-        -encoder_output: hidden states to compute attention over
-        -scope: lol who knows
-    """
-    def __init__(self, num_units, encoder_output, scope=None):
-        # attn_states is shape (batch_size, N, hid_dim)
-        self.attn_states = encoder_output
-        super(LSTMAttnCell, self).__init__(num_units)
-
-    def __call__(self, inputs, state, scope=None):
-        lstm_out, lstm_state = super(LSTMAttnCell, self).__call__(inputs, state, scope)
-        with vs.variable_scope(scope or type(self).__name__):
-            # compute scores using hs.T * W * ht
-            with vs.variable_scope("Attn"):
-                # ht is shape (batch_size, hid_dim)
-                ht = tf.nn.rnn_cell._linear(lstm_out, self._num_units, True, 1.0)
-
-                # ht is shape (batch_size, 1, hid_dim)
-                ht = tf.expand_dims(ht, axis=1)
-
-            # scores is shape (batch_size, N, 1)
-            scores = tf.reduce_sum(self.attn_states * ht, reduction_indices=2, keep_dims=True)
-
-            # do a softmax over the scores
-            scores = tf.exp(scores - tf.reduce_max(scores, reduction_indices=1, keep_dims=True))
-            scores = scores / (1e-6 + tf.reduce_sum(scores, reduction_indices=1, keep_dims=True))
-
-            # compute context vector using linear combination of attention states with
-            # weights given by attention vector.
-            # context is shape (batch_size, hid_dim)
-            context = tf.reduce_sum(self.attn_states * scores, reduction_indices=1)
-
-            with vs.variable_scope("AttnConcat"):
-                out = tf.nn.tanh(tf.nn.rnn_cell._linear([context, lstm_out], self._num_units, True, 1.0))
-
-            return (out, lstm_state)
-
-class MatchLSTMCell(tf.nn.rnn_cell.BasicLSTMCell):
-    """
-    Arguments:
-        -num_units: hidden state dimensions
-        -encoder_output: hidden states to compute attention over
-        -scope: lol who knows
-    """
-    def __init__(self, num_units, encoder_output, scope=None):
-        # shape (batch_size, Nq, hid_dim), these are question encodings
-        self.attn_states = encoder_output
-        self.q_size = int(self.attn_states.get_shape()[1]) # convert from Dimension type to int
-
-        super(MatchLSTMCell, self).__init__(num_units)
-
-    # note: inputs should be paragraph encodings
-    def __call__(self, inputs, state, scope=None):
+        #embed()
         with vs.variable_scope(scope or type(self).__name__):
 
-            with vs.variable_scope("ParAttn"):
-                par_attn = tf.nn.rnn_cell._linear([inputs, state[-1]], self._num_units, True, 1.0)
+            # unpack state
+            c_tot, h_tot = state
+            c_prev = c_tot[:, :self.hid_dim]
+            h_prev = h_tot[:, :self.hid_dim]
+            alpha = h_tot[:, self.hid_dim:self.hid_dim+self.p_size] # probability distributions for start / end index
+            beta = h_tot[:, self.hid_dim+self.p_size:]
+            s_prev = tf.argmax(alpha, axis=1) # previous estimate of start / end index
+            e_prev = tf.argmax(beta, axis=1)
+            s_prev = tf.cast(s_prev, dtype=tf.int32) # casting for compatibility with vector_slice function
+            e_prev = tf.cast(e_prev, dtype=tf.int32)
 
-            with vs.variable_scope("QuesAttn"):
-                # hit attention_states with a weight matrix (3d * 2d)
-                attn_states_reshaped = tf.reshape(self.attn_states, [-1, self._num_units])
-                ques_attn = tf.nn.rnn_cell._linear(attn_states_reshaped, output_size=self._num_units, bias=True)
-                ques_attn = tf.reshape(ques_attn, [-1, self.q_size, self._num_units])
+            with vs.variable_scope("index_into_U"):
 
-                # use expand_dims with broadcasting, this is shape [?, 1, hidden_size] now
-                par_attn = tf.expand_dims(par_attn, 1)
+                # index into U using s_prev, e_prev
+                batch_size = tf.shape(self.U)[0]
+                a = tf.range(0, batch_size, dtype=tf.int32)
+                a = tf.expand_dims(a, axis=1)
+                s_prev = tf.expand_dims(s_prev, axis=1)
+                e_prev = tf.expand_dims(e_prev, axis=1)
+                s_prev = tf.concat(1, [a, s_prev])
+                e_prev = tf.concat(1, [a, e_prev]) # collect batch indices and word indices
+                U_s = tf.gather_nd(self.U, s_prev)
+                U_e = tf.gather_nd(self.U, e_prev)
 
-                g_i = tf.nn.tanh(ques_attn + par_attn)
+                lstm_input = tf.concat(1, [U_s, U_e])
 
-            with vs.variable_scope("Scores"):
-                g_i_r = tf.reshape(g_i, [-1, self._num_units])
-                scores = tf.nn.rnn_cell._linear(g_i_r, output_size=1, bias=True)
-                scores = tf.reshape(scores, [-1, self.q_size])
-                scores = tf.nn.softmax(scores)
+        # get output of LSTM
+        self._num_units = self.hid_dim
+        prev_state = tf.nn.rnn_cell.LSTMStateTuple(c_prev, h_prev)
+        lstm_out, lstm_state = super(DecoderCell, self).__call__(lstm_input, prev_state, scope)
+        self._num_units = self.hid_dim + self.p_size
+        c_state, h_state = lstm_state
 
-            # do a softmax over the scores
-            # scores = tf.exp(scores - tf.reduce_max(scores, reduction_indices=1, keep_dims=True))
-            # scores = scores / (1e-6 + tf.reduce_sum(scores, reduction_indices=1, keep_dims=True))
+        with vs.variable_scope(scope or type(self).__name__):
 
-            # compute context vector using linear combination of attention states with
-            # weights given by attention vector.
-            # context is shape (batch_size, hid_dim)
-            scores = tf.expand_dims(scores, 2)
-            context = tf.reduce_sum(g_i * scores, reduction_indices=1)
+            # use simple MLP over (u_t, h_i, u_s_prev, u_e_prev)
+            H_i = tf.expand_dims(h_state, 1) # (batch_size, 1, hid_dim)
+            H_i = tf.tile(H_i, [1, self.p_size, 1]) # (batch_size, p_size, hid_dim)
 
-            z = tf.concat(1, [inputs, context])
+            U_s = tf.expand_dims(U_s, 1)
+            U_s = tf.tile(U_s, [1, self.p_size, 1])
 
-        lstm_out, lstm_state = super(MatchLSTMCell, self).__call__(z, state, scope)
-        return (lstm_out, lstm_state)
+            U_e = tf.expand_dims(U_e, 1)
+            U_e = tf.tile(U_e, [1, self.p_size, 1])
 
+            # reshape + _linear trick to do 2-layer MLP, to get start / end probabilities
+            U_reshaped = tf.reshape(self.U, [-1, self.hid_dim]) # shape (batch_size * p_size, hid_dim)
+            H_i_reshaped = tf.reshape(H_i, [-1, self.hid_dim])
+            U_s_reshaped = tf.reshape(U_s, [-1, self.hid_dim])
+            U_e_reshaped = tf.reshape(U_e, [-1, self.hid_dim])
+
+            with vs.variable_scope("start_probs"):
+                start_probs = tf.nn.rnn_cell._linear([U_reshaped, H_i_reshaped, U_s_reshaped, U_e_reshaped],
+                                                     output_size=self.hid_dim, bias=True)
+                start_probs = tf.nn.tanh(start_probs)
+
+                with vs.variable_scope("second_layer"):
+                    start_probs = tf.nn.rnn_cell._linear(start_probs, output_size=1, bias=True)
+                start_probs = tf.reshape(start_probs, [-1, self.p_size])
+
+            with vs.variable_scope("end_probs"):
+                end_probs = tf.nn.rnn_cell._linear([U_reshaped, H_i_reshaped, U_s_reshaped, U_e_reshaped],
+                                                   output_size=self.hid_dim, bias=True)
+                end_probs = tf.nn.tanh(end_probs)
+
+                with vs.variable_scope("second_layer"):
+                    end_probs = tf.nn.rnn_cell._linear(end_probs, output_size=1, bias=True)
+                end_probs = tf.reshape(end_probs, [-1, self.p_size])
+
+            # Masking
+            bool_masks = tf.cast(tf.sequence_mask(self.masks, maxlen=self.p_size), tf.float32)
+            add_mask = (-1e30 * (1.0 - bool_masks))
+            # add_mask = tf.log(bool_masks)
+            start_probs = tf.add(start_probs, add_mask)
+            end_probs = tf.add(end_probs, add_mask)
+
+            # reconcatenate to include new alpha and beta vectors in state
+            c_state = tf.concat(1, [c_state, c_tot[:, self.hid_dim:]])
+            h_state = tf.concat(1, [h_state, start_probs, end_probs])
+
+            probs = tf.concat(1, [start_probs, end_probs]) # shape (batch_size, 2 * p_size)
+
+            return h_state, tf.nn.rnn_cell.LSTMStateTuple(c_state, h_state)
 
 class Encoder(object):
     """
     Arguments:
         -size: dimension of the hidden states
-        -vocab_dim: dimension of the embeddings
     """
+
     def __init__(self, hidden_size, dropout):
         self.hidden_size = hidden_size
         self.dropout = dropout
 
-    def encode(self, inputs, masks, encoder_state_input=None, attention_inputs=None, model_type="gru", bidir=True, name="encoder", reuse=False, concat=True):
+    def encode(self, inputs, masks, attention_inputs=None, model_type="gru", name="encoder", reuse=False):
         """
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
@@ -193,97 +168,37 @@ class Encoder(object):
                  It can be context-level representation, word-level representation,
                  or both.
         """
+
         with tf.variable_scope(name, reuse=reuse):
 
-            ### Define the correct cell type.
+            # Define the correct cell type.
             if attention_inputs is None:
                 if model_type == "gru":
-                    if bidir:
-                        fw_cell = tf.nn.rnn_cell.GRUCell(self.hidden_size)
-                        bw_cell = tf.nn.rnn_cell.GRUCell(self.hidden_size)
-                    else:
-                        cell = tf.nn.rnn_cell.GRUCell(self.hidden_size)
+                    cell = tf.nn.rnn_cell.GRUCell(self.hidden_size)
                 elif model_type == "lstm":
-                    if bidir:
-                        fw_cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
-                        bw_cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
-                    else:
-                        cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
+                    cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
                 else:
                     raise Exception('Must specify model type.')
             else:
-                # use an attention cell - each cell uses attention to compute context
-                # over the @attention_inputs
-                if model_type == "gru":
-                    if bidir:
-                        fw_cell = GRUAttnCell(self.hidden_size, attention_inputs[0])
-                        bw_cell = GRUAttnCell(self.hidden_size, attention_inputs[1])
-                    else:
-                        cell = GRUAttnCell(self.hidden_size, attention_inputs)
-                elif model_type == "lstm":
-                    if bidir:
-                        fw_cell = LSTMAttnCell(self.hidden_size, attention_inputs[0])
-                        bw_cell = LSTMAttnCell(self.hidden_size, attention_inputs[1])
-                    else:
-                        cell = LSTMAttnCell(self.hidden_size, attention_inputs)
-                elif model_type == "match":
-                    if bidir:
-                        fw_cell = MatchLSTMCell(self.hidden_size, attention_inputs[0])
-                        bw_cell = MatchLSTMCell(self.hidden_size, attention_inputs[1])
-                    else:
-                        cell = MatchLSTMCell(self.hidden_size, attention_inputs)
-                else:
-                    raise Exception('Must specify model type.')
+                raise Exception("Attention not implemented.")
 
-            ### Define correct RNN.
-            if bidir:
-                if encoder_state_input is None:
-                    encoder_state_input = (None, None)
-                fw_cell = tf.nn.rnn_cell.DropoutWrapper(fw_cell, output_keep_prob=self.dropout)
-                bw_cell = tf.nn.rnn_cell.DropoutWrapper(bw_cell, output_keep_prob=self.dropout)
-                outputs, final_state = tf.nn.bidirectional_dynamic_rnn(fw_cell, bw_cell, inputs,
-                                                                       sequence_length=masks,
-                                                                       dtype=tf.float32,
-                                                                       initial_state_fw=encoder_state_input[0],
-                                                                       initial_state_bw=encoder_state_input[1])
-                # get concatenated stuff
-                if concat:
-                    if model_type == "gru":
-                        final_state = tf.concat(1, final_state)
-                        outputs = tf.concat(2, outputs)
-                    elif model_type == "lstm" or model_type == "match":
-                        # get rid of "c"
-                        final_state = tf.concat(1, [final_state[0][-1], final_state[1][-1]])
-                        outputs = tf.concat(2, outputs)
-                    else:
-                        raise Exception('Must specify model type.')
-                # add forward and backward hidden states together
-                else:
-                    outputs = outputs[0] + outputs[1]
-                    final_state = final_state[0] + final_state[1]
+            cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
+            #cell = tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=self.dropout)
+            outputs, final_state = tf.nn.dynamic_rnn(cell, inputs,
+                                                     sequence_length=masks,
+                                                     dtype=tf.float32)
 
-                return outputs, final_state
-
-            else:
-                cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
-                outputs, final_state = tf.nn.dynamic_rnn(cell, inputs,
-                                           sequence_length=masks,
-                                           dtype=tf.float32,
-                                           initial_state=encoder_state_input)
-                # get rid of "c"
-                if model_type == "lstm" or model_type == "match":
-                    final_state = final_state[-1]
-
-                return outputs, final_state
+            return outputs, final_state
 
 
 class Decoder(object):
-    def __init__(self, hidden_size, output_size, dropout):
+    def __init__(self, hidden_size, output_size, dropout, num_iter=4):
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.dropout = dropout
+        self.num_iter = num_iter
 
-    def decode(self, knowledge_rep, masks):
+    def decode(self, knowledge_rep, masks, model_type="gru"):
         """
         takes in a knowledge representation
         and output a probability estimation over
@@ -297,39 +212,28 @@ class Decoder(object):
         """
 
         with vs.variable_scope("decoder"):
+            # note the increased dimension for putting start and end distributions in the state per cell
+            cell = DecoderCell(num_units=(self.hidden_size + 2 * self.output_size), U=knowledge_rep, masks=masks)
+            cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
 
-            # TODO: use correct masks...since this is bidirectional...
+            # note, inputs aren't used, but we only unroll for self.num_iter steps
+            all_probs, final_probs = tf.nn.dynamic_rnn(cell, knowledge_rep[:, :self.num_iter, :], dtype=tf.float32)
 
-            with vs.variable_scope("answer_start"):
-                cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
-                #cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
-                cell = tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=self.dropout)
-                all_start_probs, _ = tf.nn.dynamic_rnn(cell, knowledge_rep, sequence_length=masks, dtype=tf.float32)
+            # the alpha and beta vectors across all iterations
+            start_probs = all_probs[:, :, self.hidden_size:self.hidden_size+self.output_size]
+            end_probs = all_probs[:, :, self.hidden_size+self.output_size:]
 
-                # P is (batch_size, output_dim, hid_dim), reshape to (batch_size * output_dim, hid_dim)
-                all_start_probs_reshaped = tf.reshape(all_start_probs, [-1, self.hidden_size])
-                # weights W = (hid_dim, 1)
-                start_probs = tf.nn.rnn_cell._linear(all_start_probs_reshaped, output_size=1, bias=True)
-                # P is now (batch_size * output_dim, 1), so reshape to get start_probs
-                start_probs = tf.reshape(start_probs, [-1, self.output_size])
+            # start_probs = final_probs[0][:, self.hidden_size:]
+            # end_probs = final_probs[1][:, self.hidden_size:]
 
-            with vs.variable_scope("answer_end"):
-                cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
-                #cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
-                cell = tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=self.dropout)
-                all_end_probs, _ = tf.nn.dynamic_rnn(cell, all_start_probs, sequence_length=masks, dtype=tf.float32)
+            # TODO: figure out whether to do masking here or internally
 
-                # do same trick as above on LSTM output to get end_probs
-                all_end_probs_reshaped = tf.reshape(all_end_probs, [-1, self.hidden_size])
-                end_probs = tf.nn.rnn_cell._linear(all_end_probs_reshaped, output_size=1, bias=True)
-                end_probs = tf.reshape(end_probs, [-1, self.output_size])
-
-            # Masking
-            bool_masks = tf.cast(tf.sequence_mask(masks, maxlen=self.output_size), tf.float32)
-            add_mask = (-1e30 * (1.0 - bool_masks))
-            # add_mask = tf.log(bool_masks)
-            start_probs = tf.add(start_probs, add_mask)
-            end_probs = tf.add(end_probs, add_mask)
+            # # Masking
+            # bool_masks = tf.cast(tf.sequence_mask(masks, maxlen=self.output_size), tf.float32)
+            # add_mask = (-1e30 * (1.0 - bool_masks))
+            # # add_mask = tf.log(bool_masks)
+            # start_probs = tf.add(start_probs, add_mask)
+            # end_probs = tf.add(end_probs, add_mask)
 
         return start_probs, end_probs
 
@@ -346,12 +250,13 @@ class QASystem(object):
         self.h_size = self.flags.state_size
         self.p_size = self.flags.output_size
         self.q_size = self.flags.question_size
+        self.dropout = 1.0 - self.flags.dropout
         self.embed_size = self.flags.embedding_size
 
         self.encoder = Encoder(hidden_size=self.h_size,
                                dropout=(1.0 - self.flags.dropout))
 
-        self.decoder = Decoder(hidden_size=self.h_size,
+        self.decoder = Decoder(hidden_size=2 * self.h_size,
                                output_size=self.p_size,
                                dropout=(1.0 - self.flags.dropout))
 
@@ -408,6 +313,54 @@ class QASystem(object):
             padded_sequence.append(sentence)
         return (padded_sequence, mask)
 
+
+    # Does coattention encoding
+    def coattention(self, P, Q, masks):
+        # P is shape (batch_size, p_size + 1, hid_size)
+        # Q is shape (batch_size, q_size + 1, hid_size)
+
+        P_t = tf.transpose(P, perm=[0, 2, 1])
+        Q_t = tf.transpose(Q, perm=[0, 2, 1])
+
+        # compute affinity matrix, shape (batch_size, p_size + 1, q_size + 1)
+        L = tf.batch_matmul(P, Q_t)
+
+        # attention weights
+        AQ = tf.nn.softmax(L)
+        AD = tf.nn.softmax(tf.transpose(L, perm=[0, 2, 1]))
+
+        # attention contexts
+        CQ = tf.batch_matmul(P_t, AQ)
+        # mapf = lambda x : tf.batch_matmul(x, AQ)
+        # CQ = tf.map_fn(mapf, P_t) # use map to multiply 3-d tensor by 2-d
+
+        # CQ should be shape (batch_size, hid_size, q_size + 1)
+
+        # contexts
+        contexts = tf.concat(1, [Q_t, CQ]) # shape (batch_size, 2 * hid_size, q_size + 1)
+        # mapf = lambda x : tf.batch_matmul(x, AD)
+        # CD = tf.map_fn(mapf, contexts) # shape (batch_size, 2 * hid_size, p_size + 1)
+        CD = tf.batch_matmul(contexts, AD)
+
+        # shape (batch_size, p_size + 1, 4 * hid_size)
+        lstm_inputs = tf.transpose(tf.concat(1, [P_t, CD]), perm=[0, 2, 1])
+
+        # NOTE: we add 1 to masks due to the p_size + 1 shape
+        cell_fw = tf.nn.rnn_cell.BasicLSTMCell(self.h_size)
+        cell_bw = tf.nn.rnn_cell.BasicLSTMCell(self.h_size)
+        cell_fw = tf.nn.rnn_cell.DropoutWrapper(cell_fw, output_keep_prob=self.dropout)
+        #cell_fw = tf.nn.rnn_cell.DropoutWrapper(cell_fw, input_keep_prob=self.dropout)
+        cell_bw = tf.nn.rnn_cell.DropoutWrapper(cell_bw, output_keep_prob=self.dropout)
+        #cell_bw = tf.nn.rnn_cell.DropoutWrapper(cell_bw, input_keep_prob=self.dropout)
+        all_states, _ = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, lstm_inputs,
+                                                               sequence_length=masks,
+                                                               dtype=tf.float32)
+
+        U = tf.concat(2, all_states) # concatenate fwd and bck states
+        U = U[:, :self.p_size, :] # cut off extra dimension from sentinel
+
+        return U
+
     def setup_system(self):
         """
         After your modularized implementation of encoder and decoder
@@ -416,52 +369,69 @@ class QASystem(object):
         :return:
         """
 
-        # first do a basic LSTM encoding of questions and contexts
+        # note that we reuse the SAME encoder for both question and paragraph
         question_states, final_question_state = self.encoder.encode(self.question_embeddings,
                                                                     self.mask_q_placeholder,
                                                                     attention_inputs=None,
                                                                     model_type=self.flags.model_type,
-                                                                    bidir=False,
-                                                                    name="question_encoder",
-                                                                    reuse=False,
-                                                                    concat=False)
+                                                                    reuse=False)
 
-        # TODO: try with and without attention here
+        # add in sentinel vector
+        batch_size = tf.shape(question_states)[0]
+        sent_vec = tf.get_variable("q_sent", shape=(1, 1, self.h_size),
+                                   initializer=tf.contrib.layers.xavier_initializer())
+        sent_vec = tf.tile(sent_vec, [batch_size, 1, 1])
+        question_states = tf.concat(1, [question_states, sent_vec])
+
+        # do another linear projection
+
+        # Q is (batch_size, q_size + 1, hid_size)
+        Q = tf.reshape(question_states, [-1, self.h_size])
+        Q = tf.nn.rnn_cell._linear(Q, output_size=self.h_size, bias=True)
+        Q = tf.nn.tanh(tf.reshape(Q, [-1, self.q_size + 1, self.h_size]))
+
         ctx_states, final_ctx_state = self.encoder.encode(self.context_embeddings,
                                                           self.mask_ctx_placeholder,
                                                           attention_inputs=None,
                                                           model_type=self.flags.model_type,
-                                                          bidir=False,
-                                                          name="context_encoder",
-                                                          reuse=False,
-                                                          concat=False)
+                                                          reuse=True)
 
-        # match LSTM layer
-        # TODO: make this bidirectional
-        match_states, final_match_state = self.encoder.encode(self.context_embeddings,
-                                                              self.mask_ctx_placeholder,
-                                                              encoder_state_input=None, #final_question_state,
-                                                              attention_inputs=question_states,
-                                                              model_type="match",
-                                                              bidir=False,
-                                                              name="match_encoder",
-                                                              reuse=False,
-                                                              concat=False)
+        sent_vec = tf.get_variable("p_sent", shape=(1, 1, self.h_size),
+                                   initializer=tf.contrib.layers.xavier_initializer())
+        sent_vec = tf.tile(sent_vec, [batch_size, 1, 1])
+        P = tf.concat(1, [ctx_states, sent_vec])
 
+
+        U = self.coattention(P=P,
+                             Q=Q,
+                             masks=self.mask_ctx_placeholder)
 
         # decoder takes encoded representation to probability dists over start / end index
-        self.start_probs, self.end_probs = self.decoder.decode(knowledge_rep=match_states,
-                                                               masks=self.mask_ctx_placeholder)
-
+        self.start_probs, self.end_probs = self.decoder.decode(knowledge_rep=U,
+                                                               masks=self.mask_ctx_placeholder,
+                                                               model_type=self.flags.model_type)
 
     def setup_loss(self):
         """
         Set up your loss computation here
         :return:
         """
+
+        # TODO: need to sum over all time steps in start_probs and end_probs in a better way...
+
         with vs.variable_scope("loss"):
-            self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs, self.answer_span_placeholder[:, 0])) + \
-                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs,self.answer_span_placeholder[:, 1]))
+            self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs[:, 0, :], self.answer_span_placeholder[:, 0])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs[:, 0, :], self.answer_span_placeholder[:, 1])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs[:, 1, :], self.answer_span_placeholder[:, 0])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs[:, 1, :], self.answer_span_placeholder[:, 1])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs[:, 2, :], self.answer_span_placeholder[:, 0])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs[:, 2, :], self.answer_span_placeholder[:, 1])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs[:, 3, :], self.answer_span_placeholder[:, 0])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs[:, 3, :], self.answer_span_placeholder[:, 1]))
+            
+            # self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs, self.answer_span_placeholder[:, 0])) + \
+            #             tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs, self.answer_span_placeholder[:, 1]))
+
 
     def setup_embeddings(self):
         """
@@ -542,7 +512,8 @@ class QASystem(object):
 
         outputs = session.run(output_feed, input_feed)
 
-        return outputs
+        # note, we need to do this in order to get the correct F1 scores (only take start/end probs of last iter)
+        return outputs[0][:, -1, :], outputs[1][:, -1, :]
 
     def answer(self, session, data):
 
@@ -718,7 +689,7 @@ class QASystem(object):
                            train_context=train_context,
                            val_context=val_context)
             logging.info("Saving model in %s", train_dir)
-            self.saver.save(session, train_dir)
+            self.saver.save(session, train_dir + "/qa.ckpt")
 
     def minibatches(self, data, batch_size, shuffle=True):
         num_data = len(data[0])

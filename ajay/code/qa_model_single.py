@@ -620,7 +620,7 @@ class QASystem(object):
             logging.info("Epoch %d out of %d", epoch + 1, self.flags.epochs)
             self.run_epoch(sess=session, train_set=train_dataset, val_set=val_dataset, context=val_context)
             logging.info("Saving model in %s", train_dir)
-            saver.save(session, train_dir)
+            self.saver.save(session, train_dir + '/qa.ckpt')
 
         self.evaluate_answer(session, val_dataset, val_context, sample=None, log=True)
 

@@ -8,24 +8,25 @@ import json
 import tensorflow as tf
 
 from qa_model import Encoder, QASystem, Decoder
+#from qa_multiperspective import Encoder, QASystem, Decoder
 from os.path import join as pjoin
 import numpy as np
 
 import logging
 
-from IPython import embed
-
 logging.basicConfig(level=logging.INFO)
 
-tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.") # 0.001
+tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.20, "Fraction of units randomly dropped on non-recurrent connections.") # 0.15
 tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
-tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.") # 100
-tf.app.flags.DEFINE_integer("output_size", 600, "The output size of your model.") #766 #600
+tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
+tf.app.flags.DEFINE_integer("output_size", 500, "The output size of your model.") #766 #600
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
+tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
+tf.app.flags.DEFINE_string("load_train_dir", "", "Training directory to load model parameters from to resume training (default: {train_dir}).")
 tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (default: ./log)")
 tf.app.flags.DEFINE_string("optimizer", "adam", "adam / sgd")
 tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per print.")
@@ -36,13 +37,12 @@ tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embeddin
 # added
 tf.app.flags.DEFINE_string("model_type", "lstm", "specify either gru or lstm cell type for encoding")
 tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
-tf.app.flags.DEFINE_integer("grad_clip", 0, "whether to clip gradients or not")
-tf.app.flags.DEFINE_integer("question_size", 60, "The question size of your model.") # 60
-tf.app.flags.DEFINE_integer("num_perspectives", 10, "Number of perspectives.") # 60
+tf.app.flags.DEFINE_integer("grad_clip", 1, "whether to clip gradients or not")
+tf.app.flags.DEFINE_integer("question_size",30, "The question size of your model.")
+tf.app.flags.DEFINE_integer("batch_norm",1, "Toggle batch normalization")
+tf.app.flags.DEFINE_integer("anneal",0, "Toggle lr annealing")
+tf.app.flags.DEFINE_integer("num_perspectives",1, "Number of perspectives")
 
-tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
-tf.app.flags.DEFINE_string("load_train_dir", "", "Training directory to load model parameters from to resume training (default: {train_dir}).")
-#tf.app.flags.DEFINE_string("load_train_dir", "models", "Training directory to load model parameters from to resume training (default: {train_dir}).")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -190,10 +190,15 @@ def main(_):
 
     assert max_ctx_len==FLAGS.output_size, "MISMATCH BETWEEN MAX_CTX_LEN AND FLAGS.OUTPUT_SIZE: "+str(max_ctx_len)+", "+str(FLAGS.output_size)
 
-    context_ids, ctx_mask = pad(context_ids, FLAGS.output_size)
-    question_ids, q_mask = pad(question_ids, FLAGS.question_size)
-    val_context_ids, val_ctx_mask = pad(val_context_ids, FLAGS.output_size)
-    val_question_ids, val_q_mask = pad(val_question_ids, FLAGS.question_size)
+    # context_ids, ctx_mask = pad(context_ids, FLAGS.output_size)
+    # question_ids, q_mask = pad(question_ids, FLAGS.question_size)
+    # val_context_ids, val_ctx_mask = pad(val_context_ids, FLAGS.output_size)
+    # val_question_ids, val_q_mask = pad(val_question_ids, FLAGS.question_size)
+
+    context_ids, ctx_mask = pad(context_ids, max_ctx_len)
+    question_ids, q_mask = pad(question_ids, max_q_len)
+    val_context_ids, val_ctx_mask = pad(val_context_ids, max_ctx_len)
+    val_question_ids, val_q_mask = pad(val_question_ids, max_q_len)
 
     context_ids = np.array(context_ids)
     question_ids = np.array(question_ids)
@@ -207,14 +212,14 @@ def main(_):
     val_ctx_mask = np.array(val_ctx_mask)
     val_q_mask = np.array(val_q_mask)
     
-    # check_pad(context_ids, ctx_mask)
-    # print("CONTEXT IDS PADDED AND CHECKED")
-    # check_pad(question_ids, q_mask)
-    # print("QUESTION IDS PADDED AND CHECKED")
-    # check_pad(val_context_ids, val_ctx_mask)
-    # print("VAL CONTEXT IDS PADDED AND CHECKED")
-    # check_pad(val_question_ids, val_q_mask)
-    # print("VAL QUESTION IDS PADDED AND CHECKED")
+    check_pad(context_ids, ctx_mask)
+    print("CONTEXT IDS PADDED AND CHECKED")
+    check_pad(question_ids, q_mask)
+    print("QUESTION IDS PADDED AND CHECKED")
+    check_pad(val_context_ids, val_ctx_mask)
+    print("VAL CONTEXT IDS PADDED AND CHECKED")
+    check_pad(val_question_ids, val_q_mask)
+    print("VAL QUESTION IDS PADDED AND CHECKED")
 
     dataset=[context_ids,question_ids,answer_spans,ctx_mask,q_mask,context]
     val_dataset=[val_context_ids,val_question_ids,val_answer_spans,val_ctx_mask,val_q_mask,val_context]
@@ -224,8 +229,7 @@ def main(_):
 
     print("Using model type : {}".format(FLAGS.model_type))
 
-    qa = QASystem(pretrained_embeddings=embeddings,
-                  flags=FLAGS)
+    qa = QASystem(pretrained_embeddings=embeddings,flags=FLAGS)
 
     if not os.path.exists(FLAGS.log_dir):
         os.makedirs(FLAGS.log_dir)

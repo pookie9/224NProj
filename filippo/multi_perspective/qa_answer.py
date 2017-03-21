@@ -14,7 +14,7 @@ import numpy as np
 from six.moves import xrange
 import tensorflow as tf
 
-from qa_model_improved_baseline import Encoder, QASystem, Decoder
+from qa_model import Encoder, QASystem, Decoder
 from preprocessing.squad_preprocess import data_from_json, maybe_download, squad_base_url, \
     invert_map, tokenize, token_idx_map
 import qa_data
@@ -27,12 +27,12 @@ FLAGS = tf.app.flags.FLAGS
 
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
-tf.app.flags.DEFINE_float("dropout", 0.10, "Fraction of units randomly dropped on non-recurrent connections.")
+tf.app.flags.DEFINE_float("dropout", 0.20, "Fraction of units randomly dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
-tf.app.flags.DEFINE_integer("output_size", 350, "The output size of your model.")
+tf.app.flags.DEFINE_integer("output_size", 300, "The output size of your model.")
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory (default: ./train).")
 tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (default: ./log)")
@@ -44,7 +44,7 @@ tf.app.flags.DEFINE_string("dev_path", "data/squad/dev-v1.1.json", "Path to the 
 tf.app.flags.DEFINE_string("model_type", "lstm", "specify either gru or lstm cell type for encoding")
 tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
 tf.app.flags.DEFINE_integer("grad_clip", 1, "whether to clip gradients or not")
-tf.app.flags.DEFINE_integer("question_size", 60, "The question size of your model.") # 60
+tf.app.flags.DEFINE_integer("question_size", 30, "The question size of your model.") # 60
 
 
 def initialize_model(session, model, train_dir):

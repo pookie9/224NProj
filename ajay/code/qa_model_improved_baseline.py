@@ -375,8 +375,8 @@ class QASystem(object):
         # TODO: can use filter here
         P_filtered = self.context_embeddings
         # # first filter paragraph embeddings on relevancy
-        P_filtered = self.filter(Q=self.question_embeddings,
-                                 P=self.context_embeddings)
+        # P_filtered = self.filter(Q=self.question_embeddings,
+        #                          P=self.context_embeddings)
 
         # note that we reuse the SAME encoder for both question and paragraph
         question_states, final_question_state = self.encoder.encode(self.question_embeddings,
@@ -400,17 +400,17 @@ class QASystem(object):
                                                           reuse=False, name='ctx_encoder')
 
         # TODO: can use coattention here
-        feed_states = self.coattention(P=ctx_states,
-                             Q=question_states,
-                             masks=self.mask_ctx_placeholder)
+        # U = self.coattention(P=ctx_states,
+        #                      Q=question_states,
+        #                      masks=self.mask_ctx_placeholder)
 
-        #feed_states = self.mixer(q_states=question_states,
-        #                         ctx_states=ctx_states)
+        feed_states = self.mixer(q_states=question_states,
+                                 ctx_states=ctx_states)
 
         # decoder takes encoded representation to probability dists over start / end index
         self.start_probs, self.end_probs = self.decoder.decode(knowledge_rep=feed_states,
                                                                masks=self.mask_ctx_placeholder,
-                                                               initial_state=final_question_state)
+                                                               model_type=self.flags.model_type, initial_state=final_question_state)
 
     def setup_loss(self):
         """
@@ -428,31 +428,10 @@ class QASystem(object):
         """
         with vs.variable_scope("embeddings"):
             embeddings = tf.Variable(self.pretrained_embeddings, name='embedding', dtype=tf.float32, trainable=False) #only learn one common embedding
+
             self.question_embeddings = tf.nn.embedding_lookup(embeddings, self.question_placeholder)
+
             self.context_embeddings = tf.nn.embedding_lookup(embeddings, self.context_placeholder)
-            """
-            q_mean,q_var = tf.nn.moments(question_embeddings, axes=[2], shift=None, name=None, keep_dims=True)
-            ctx_mean,ctx_var = tf.nn.moments(context_embeddings, axes=[2], shift=None, name=None, keep_dims=True)
-
-
-
-            # q_scale = tf.Variable(tf.zeros,name='q_scale',dtype=tf.float32,trainable=True)
-            # ctx_scale = tf.Variable(1.0,name='ctx_scale',dtype=tf.float32,trainable=True)
-            # q_offset = tf.Variable(1.0,name='q_offset',dtype=tf.float32,trainable=True)
-            # ctx_offset = tf.Variable(1.0,name='ctx_offset',dtype=tf.float32,trainable=True) 
-
-
-            q_scale = tf.get_variable("q_scale", shape=[self.q_size,self.embed_size],initializer=tf.ones_initializer(tf.float32))
-            ctx_scale = tf.get_variable("ctx_scale", shape=[self.p_size,self.embed_size],initializer=tf.ones_initializer(tf.float32))
-            q_offset = tf.get_variable("q_offset", shape=[self.q_size,self.embed_size],initializer=tf.ones_initializer(tf.float32))
-            ctx_offset = tf.get_variable("ctx_offset", shape=[self.p_size,self.embed_size],initializer=tf.ones_initializer(tf.float32))
-
-
-            self.question_embeddings = tf.nn.batch_normalization(question_embeddings, q_mean, q_var, q_offset,q_scale, variance_epsilon=0.0000001)
-            self.context_embeddings = tf.nn.batch_normalization(context_embeddings, ctx_mean, ctx_var, ctx_offset, ctx_scale, variance_epsilon=0.0000001)
-            """
-
-           
 
 
     def optimize(self, session, context_batch, question_batch, answer_span_batch, mask_ctx_batch, mask_q_batch):

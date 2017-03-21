@@ -230,8 +230,6 @@ class QASystem(object):
 
         # attention contexts
         CQ = tf.batch_matmul(P_t, AQ)
-        # mapf = lambda x : tf.batch_matmul(x, AQ)
-        # CQ = tf.map_fn(mapf, P_t) # use map to multiply 3-d tensor by 2-d
 
         # CQ should be shape (batch_size, hid_size, q_size + 1)
 
@@ -576,7 +574,7 @@ class QASystem(object):
                            train_context=train_context,
                            val_context=val_context)
             logging.info("Saving model in %s", train_dir)
-            self.saver.save(session, train_dir)
+            self.saver.save(session, train_dir + "/qa.ckpt")
 
     def minibatches(self, data, batch_size, shuffle=True):
         num_data = len(data[0])
