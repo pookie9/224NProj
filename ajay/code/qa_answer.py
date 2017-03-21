@@ -44,6 +44,7 @@ tf.app.flags.DEFINE_string("model_type", "lstm", "specify either gru or lstm cel
 tf.app.flags.DEFINE_integer("debug", 0, "whether to set debug or not")
 tf.app.flags.DEFINE_integer("grad_clip", 0, "whether to clip gradients or not")
 tf.app.flags.DEFINE_integer("question_size", 60, "The question size of your model.") # 60
+tf.app.flags.DEFINE_integer("grad_clip", 0, "whether to clip gradients or not")
 
 
 def initialize_model(session, model, train_dir):

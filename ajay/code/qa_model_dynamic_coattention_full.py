@@ -21,7 +21,7 @@ from tensorflow.python.ops.gen_math_ops import _batch_mat_mul as batch_matmul
 logging.basicConfig(level=logging.INFO)
 
 
-### Dynamic Coattention:
+### Dynamic Coattention (Full):
 
 def get_optimizer(opt):
     if opt == "adam":
@@ -31,6 +31,111 @@ def get_optimizer(opt):
     else:
         assert (False)
     return optfn
+
+
+class DecoderCell(tf.nn.rnn_cell.BasicLSTMCell):
+    """
+    Arguments:
+        -num_units: hidden state dimensions
+        -encoder_output: hidden states to compute attention over
+        -scope: lol who knows
+    """
+
+    def __init__(self, num_units, U, masks, scope=None):
+        # U is shape (batch_size, p_size, hid_dim)
+        self.U = U
+        U_shape = U.get_shape()
+        self.p_size = int(U_shape[1])
+        self.hid_dim = int(U_shape[2])
+        self.masks = masks  # for masking the alpha and beta probability vectors
+
+        # the total state is dimension hid_size + 2 * p_size
+        super(DecoderCell, self).__init__(num_units)
+
+        # assert(self._num_units == self.hid_dim)
+
+    def __call__(self, inputs, state, scope=None):
+        # embed()
+        with vs.variable_scope(scope or type(self).__name__):
+            # unpack state
+            c_tot, h_tot = state
+            c_prev = c_tot[:, :self.hid_dim]
+            h_prev = h_tot[:, :self.hid_dim]
+            alpha = h_tot[:, self.hid_dim:self.hid_dim + self.p_size]  # probability distributions for start / end index
+            beta = h_tot[:, self.hid_dim + self.p_size:]
+            s_prev = tf.argmax(alpha, axis=1)  # previous estimate of start / end index
+            e_prev = tf.argmax(beta, axis=1)
+            s_prev = tf.cast(s_prev, dtype=tf.int32)  # cast from 64 to 32
+            e_prev = tf.cast(e_prev, dtype=tf.int32)
+
+            with vs.variable_scope("index_into_U"):
+                # index into U using s_prev, e_prev
+                batch_size = tf.shape(self.U)[0]
+                a = tf.range(0, batch_size, dtype=tf.int32)
+                a = tf.expand_dims(a, axis=1)
+                s_prev = tf.expand_dims(s_prev, axis=1)
+                e_prev = tf.expand_dims(e_prev, axis=1)
+                s_prev = tf.concat(1, [a, s_prev])
+                e_prev = tf.concat(1, [a, e_prev])  # collect batch indices and word indices
+                U_s = tf.gather_nd(self.U, s_prev)
+                U_e = tf.gather_nd(self.U, e_prev)
+
+                lstm_input = tf.concat(1, [U_s, U_e])
+
+        # get output of LSTM
+        self._num_units = self.hid_dim
+        prev_state = tf.nn.rnn_cell.LSTMStateTuple(c_prev, h_prev)
+        lstm_out, lstm_state = super(DecoderCell, self).__call__(lstm_input, prev_state, scope)
+        self._num_units = self.hid_dim + 2 * self.p_size
+        c_state, h_state = lstm_state
+
+        with vs.variable_scope(scope or type(self).__name__):
+            # use simple MLP over (u_t, h_i, u_s_prev, u_e_prev)
+            H_i = tf.expand_dims(h_state, 1)  # (batch_size, 1, hid_dim)
+            H_i = tf.tile(H_i, [1, self.p_size, 1])  # (batch_size, p_size, hid_dim)
+
+            U_s = tf.expand_dims(U_s, 1)
+            U_s = tf.tile(U_s, [1, self.p_size, 1])
+
+            U_e = tf.expand_dims(U_e, 1)
+            U_e = tf.tile(U_e, [1, self.p_size, 1])
+
+            # reshape + _linear trick to do 2-layer MLP, to get start / end probabilities
+            U_reshaped = tf.reshape(self.U, [-1, self.hid_dim])  # shape (batch_size * p_size, hid_dim)
+            H_i_reshaped = tf.reshape(H_i, [-1, self.hid_dim])
+            U_s_reshaped = tf.reshape(U_s, [-1, self.hid_dim])
+            U_e_reshaped = tf.reshape(U_e, [-1, self.hid_dim])
+
+            with vs.variable_scope("start_probs"):
+                start_probs = tf.nn.rnn_cell._linear([U_reshaped, H_i_reshaped, U_s_reshaped, U_e_reshaped],
+                                                     output_size=self.hid_dim, bias=True)
+                start_probs = tf.nn.tanh(start_probs)
+
+                with vs.variable_scope("second_layer"):
+                    start_probs = tf.nn.rnn_cell._linear(start_probs, output_size=1, bias=True)
+                start_probs = tf.reshape(start_probs, [-1, self.p_size])
+
+            with vs.variable_scope("end_probs"):
+                end_probs = tf.nn.rnn_cell._linear([U_reshaped, H_i_reshaped, U_s_reshaped, U_e_reshaped],
+                                                   output_size=self.hid_dim, bias=True)
+                end_probs = tf.nn.tanh(end_probs)
+
+                with vs.variable_scope("second_layer"):
+                    end_probs = tf.nn.rnn_cell._linear(end_probs, output_size=1, bias=True)
+                end_probs = tf.reshape(end_probs, [-1, self.p_size])
+
+            # Masking
+            bool_masks = tf.cast(tf.sequence_mask(self.masks, maxlen=self.p_size), tf.float32)
+            add_mask = (-1e30 * (1.0 - bool_masks))
+            # add_mask = tf.log(bool_masks)
+            start_probs = tf.add(start_probs, add_mask)
+            end_probs = tf.add(end_probs, add_mask)
+
+            # reconcatenate to include new alpha and beta vectors in state
+            c_state = tf.concat(1, [c_state, c_tot[:, self.hid_dim:]])
+            h_state = tf.concat(1, [h_state, start_probs, end_probs])
+
+            return h_state, tf.nn.rnn_cell.LSTMStateTuple(c_state, h_state)
 
 
 class Encoder(object):
@@ -75,7 +180,7 @@ class Encoder(object):
                 raise Exception("Attention not implemented.")
 
             cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
-            #cell = tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=self.dropout)
+            # cell = tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=self.dropout)
             outputs, final_state = tf.nn.dynamic_rnn(cell, inputs,
                                                      sequence_length=masks,
                                                      dtype=tf.float32)
@@ -84,10 +189,11 @@ class Encoder(object):
 
 
 class Decoder(object):
-    def __init__(self, hidden_size, output_size, dropout):
+    def __init__(self, hidden_size, output_size, dropout, num_iter=4):
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.dropout = dropout
+        self.num_iter = num_iter
 
     def decode(self, knowledge_rep, masks, model_type="gru"):
         """
@@ -103,36 +209,28 @@ class Decoder(object):
         """
 
         with vs.variable_scope("decoder"):
-            with vs.variable_scope("answer_start"):
-                cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
-                cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
-                #cell = tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=self.dropout)
-                all_start_probs, _ = tf.nn.dynamic_rnn(cell, knowledge_rep, sequence_length=masks, dtype=tf.float32)
+            # note the increased dimension for putting start and end distributions in the state per cell
+            cell = DecoderCell(num_units=(self.hidden_size + 2 * self.output_size), U=knowledge_rep, masks=masks)
+            cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
 
-                # P is (batch_size, output_dim, hid_dim), reshape to (batch_size * output_dim, hid_dim)
-                all_start_probs_reshaped = tf.reshape(all_start_probs, [-1, self.hidden_size])
-                # weights W = (hid_dim, 1)
-                start_probs = tf.nn.rnn_cell._linear(all_start_probs_reshaped, output_size=1, bias=True)
-                # P is now (batch_size * output_dim, 1), so reshape to get start_probs
-                start_probs = tf.reshape(start_probs, [-1, self.output_size])
+            # note, inputs aren't used, but we only unroll for self.num_iter steps
+            all_probs, final_probs = tf.nn.dynamic_rnn(cell, knowledge_rep[:, :self.num_iter, :], dtype=tf.float32)
 
-            with vs.variable_scope("answer_end"):
-                cell = tf.nn.rnn_cell.BasicLSTMCell(self.hidden_size)
-                cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout)
-                #cell = tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=self.dropout)
-                all_end_probs, _ = tf.nn.dynamic_rnn(cell, all_start_probs, sequence_length=masks, dtype=tf.float32)
+            # the alpha and beta vectors across all iterations
+            start_probs = all_probs[:, :, self.hidden_size:self.hidden_size + self.output_size]
+            end_probs = all_probs[:, :, self.hidden_size + self.output_size:]
 
-                # do same trick as above on LSTM output to get end_probs
-                all_end_probs_reshaped = tf.reshape(all_end_probs, [-1, self.hidden_size])
-                end_probs = tf.nn.rnn_cell._linear(all_end_probs_reshaped, output_size=1, bias=True)
-                end_probs = tf.reshape(end_probs, [-1, self.output_size])
+            # start_probs = final_probs[0][:, self.hidden_size:]
+            # end_probs = final_probs[1][:, self.hidden_size:]
 
-            # Masking
-            bool_masks = tf.cast(tf.sequence_mask(masks, maxlen=self.output_size), tf.float32)
-            add_mask = (-1e30 * (1.0 - bool_masks))
-            # add_mask = tf.log(bool_masks)
-            start_probs = tf.add(start_probs, add_mask)
-            end_probs = tf.add(end_probs, add_mask)
+            # TODO: figure out whether to do masking here or internally
+
+            # # Masking
+            # bool_masks = tf.cast(tf.sequence_mask(masks, maxlen=self.output_size), tf.float32)
+            # add_mask = (-1e30 * (1.0 - bool_masks))
+            # # add_mask = tf.log(bool_masks)
+            # start_probs = tf.add(start_probs, add_mask)
+            # end_probs = tf.add(end_probs, add_mask)
 
         return start_probs, end_probs
 
@@ -212,7 +310,6 @@ class QASystem(object):
             padded_sequence.append(sentence)
         return (padded_sequence, mask)
 
-
     # Does coattention encoding
     def coattention(self, P, Q, masks):
         # P is shape (batch_size, p_size + 1, hid_size)
@@ -230,11 +327,13 @@ class QASystem(object):
 
         # attention contexts
         CQ = tf.batch_matmul(P_t, AQ)
+        # mapf = lambda x : tf.batch_matmul(x, AQ)
+        # CQ = tf.map_fn(mapf, P_t) # use map to multiply 3-d tensor by 2-d
 
         # CQ should be shape (batch_size, hid_size, q_size + 1)
 
         # contexts
-        contexts = tf.concat(1, [Q_t, CQ]) # shape (batch_size, 2 * hid_size, q_size + 1)
+        contexts = tf.concat(1, [Q_t, CQ])  # shape (batch_size, 2 * hid_size, q_size + 1)
         # mapf = lambda x : tf.batch_matmul(x, AD)
         # CD = tf.map_fn(mapf, contexts) # shape (batch_size, 2 * hid_size, p_size + 1)
         CD = tf.batch_matmul(contexts, AD)
@@ -246,15 +345,15 @@ class QASystem(object):
         cell_fw = tf.nn.rnn_cell.BasicLSTMCell(self.h_size)
         cell_bw = tf.nn.rnn_cell.BasicLSTMCell(self.h_size)
         cell_fw = tf.nn.rnn_cell.DropoutWrapper(cell_fw, output_keep_prob=self.dropout)
-        #cell_fw = tf.nn.rnn_cell.DropoutWrapper(cell_fw, input_keep_prob=self.dropout)
+        # cell_fw = tf.nn.rnn_cell.DropoutWrapper(cell_fw, input_keep_prob=self.dropout)
         cell_bw = tf.nn.rnn_cell.DropoutWrapper(cell_bw, output_keep_prob=self.dropout)
-        #cell_bw = tf.nn.rnn_cell.DropoutWrapper(cell_bw, input_keep_prob=self.dropout)
+        # cell_bw = tf.nn.rnn_cell.DropoutWrapper(cell_bw, input_keep_prob=self.dropout)
         all_states, _ = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, lstm_inputs,
-                                                               sequence_length=masks,
-                                                               dtype=tf.float32)
+                                                        sequence_length=masks,
+                                                        dtype=tf.float32)
 
-        U = tf.concat(2, all_states) # concatenate fwd and bck states
-        U = U[:, :self.p_size, :] # cut off extra dimension from sentinel
+        U = tf.concat(2, all_states)  # concatenate fwd and bck states
+        U = U[:, :self.p_size, :]  # cut off extra dimension from sentinel
 
         return U
 
@@ -298,7 +397,6 @@ class QASystem(object):
         sent_vec = tf.tile(sent_vec, [batch_size, 1, 1])
         P = tf.concat(1, [ctx_states, sent_vec])
 
-
         U = self.coattention(P=P,
                              Q=Q,
                              masks=self.mask_ctx_placeholder)
@@ -313,9 +411,37 @@ class QASystem(object):
         Set up your loss computation here
         :return:
         """
+
+        # TODO: need to sum over all time steps in start_probs and end_probs in a better way...
+
         with vs.variable_scope("loss"):
-            self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs, self.answer_span_placeholder[:, 0])) + \
-                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs, self.answer_span_placeholder[:, 1]))
+            self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs[:, 0, :],
+                                                                                      self.answer_span_placeholder[:,
+                                                                                      0])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs[:, 0, :],
+                                                                                      self.answer_span_placeholder[:,
+                                                                                      1])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs[:, 1, :],
+                                                                                      self.answer_span_placeholder[:,
+                                                                                      0])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs[:, 1, :],
+                                                                                      self.answer_span_placeholder[:,
+                                                                                      1])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs[:, 2, :],
+                                                                                      self.answer_span_placeholder[:,
+                                                                                      0])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs[:, 2, :],
+                                                                                      self.answer_span_placeholder[:,
+                                                                                      1])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs[:, 3, :],
+                                                                                      self.answer_span_placeholder[:,
+                                                                                      0])) + \
+                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs[:, 3, :],
+                                                                                      self.answer_span_placeholder[:,
+                                                                                      1]))
+
+            # self.loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.start_probs, self.answer_span_placeholder[:, 0])) + \
+            #             tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.end_probs, self.answer_span_placeholder[:, 1]))
 
     def setup_embeddings(self):
         """
@@ -340,8 +466,6 @@ class QASystem(object):
 
         # fill in this feed_dictionary like:
         # input_feed['train_x'] = train_x
-
-        # TODO: should we do np.map(np.array()) here???????
 
         input_feed[self.context_placeholder] = context_batch
         input_feed[self.question_placeholder] = question_batch
@@ -398,7 +522,8 @@ class QASystem(object):
 
         outputs = session.run(output_feed, input_feed)
 
-        return outputs
+        # note, we need to do this in order to get the correct F1 scores (only take start/end probs of last iter)
+        return outputs[0][:, -1, :], outputs[1][:, -1, :]
 
     def answer(self, session, data):
 
