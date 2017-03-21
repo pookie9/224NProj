@@ -32,21 +32,6 @@ def get_optimizer(opt):
         assert (False)
     return optfn
 
-class BatchNormWrapper(RNNCell):
-  """Operator adding dropout to inputs and outputs of the given cell."""
-
-  def __init__(self, cell, gamma=None,beta=None,seed=None):
-    self._cell = cell
-    if gamma=None:
-        gamma=    tf.get_variable("gamma", self.input_size, )
-    self.gamma=gamma
-    self.beta=beta
-    
-
-  def __call__(self, inputs, state, scope=None):
-    """Run the cell with the declared dropouts."""
-    output, new_state = self._cell(inputs, state, scope)
-    return output, new_state
 
 class Encoder(object):
     """
@@ -385,20 +370,6 @@ class QASystem(object):
         outputs = session.run(output_feed, input_feed)
 
         return outputs
-    def answer_probs(self,session,data):
-        """Returns the start and end probabilities as numpy arrays of shape (num_question,max_context_length)"""
-                yp_lst = []
-        yp2_lst = []
-        prog_train = Progbar(target=1 + int(len(data[0]) / self.flags.batch_size))
-        for i, batch in enumerate(self.minibatches(data, self.flags.batch_size, shuffle=False)):
-            yp, yp2 = self.decode(session, *batch)
-            yp_lst.append(yp)
-            yp2_lst.append(yp2)
-            prog_train.update(i + 1, [(self.flags.run_name +" is Answering Questions",0.0)])
-        print("")
-        yp_all = np.concatenate(yp_lst, axis=0)
-        yp2_all = np.concatenate(yp2_lst, axis=0)
-        return (yp_all,yp2_all)
 
     def answer(self, session, data):
 
