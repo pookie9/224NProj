@@ -31,47 +31,6 @@ def get_optimizer(opt):
     else:
         assert (False)
     return optfn
-
-class LSTMAttnCell(tf.nn.rnn_cell.BasicLSTMCell):
-    """
-    Arguments:
-        -num_units: hidden state dimensions
-        -encoder_output: hidden states to compute attention over
-        -scope: lol who knows
-    """
-    def __init__(self, num_units, encoder_output, scope=None):
-        # attn_states is shape (batch_size, N, hid_dim)
-        self.attn_states = encoder_output
-        super(LSTMAttnCell, self).__init__(num_units)
-
-    def __call__(self, inputs, state, scope=None):
-        lstm_out, lstm_state = super(LSTMAttnCell, self).__call__(inputs, state, scope)
-        with vs.variable_scope(scope or type(self).__name__):
-            # compute scores using hs.T * W * ht
-            with vs.variable_scope("Attn"):
-                # ht is shape (batch_size, hid_dim)
-                ht = tf.nn.rnn_cell._linear(lstm_out, self._num_units, True, 1.0)
-
-                # ht is shape (batch_size, 1, hid_dim)
-                ht = tf.expand_dims(ht, axis=1)
-
-            # scores is shape (batch_size, N, 1)
-            scores = tf.reduce_sum(self.attn_states * ht, reduction_indices=2, keep_dims=True)
-
-            # do a softmax over the scores
-            scores = tf.exp(scores - tf.reduce_max(scores, reduction_indices=1, keep_dims=True))
-            scores = scores / (1e-6 + tf.reduce_sum(scores, reduction_indices=1, keep_dims=True))
-
-            # compute context vector using linear combination of attention states with
-            # weights given by attention vector.
-            # context is shape (batch_size, hid_dim)
-            context = tf.reduce_sum(self.attn_states * scores, reduction_indices=1)
-
-            with vs.variable_scope("AttnConcat"):
-                out = tf.nn.tanh(tf.nn.rnn_cell._linear([context, lstm_out], self._num_units, True, 1.0))
-
-            return (out, lstm_state)
-
 class Encoder(object):
     """
     Arguments:
@@ -373,7 +332,7 @@ class QASystem(object):
         """
 
         # TODO: can use filter here
-        #P_filtered = self.context_embeddings
+        P_filtered = self.context_embeddings
         # # first filter paragraph embeddings on relevancy
         #P_filtered = self.filter(Q=self.question_embeddings,
         #                         P=self.context_embeddings)
@@ -391,7 +350,7 @@ class QASystem(object):
         # question_states = tf.nn.tanh(tf.reshape(question_states, [-1, self.q_size + 1, self.h_size]))
 
         # TODO: can use attention over the question here too (set attention_inputs)
-        ctx_states, final_ctx_state = self.encoder.encode(self.context_embeddings,
+        ctx_states, final_ctx_state = self.encoder.encode(P_filtered,
                                                           self.mask_ctx_placeholder,
                                                           attention_inputs=None,
                                                           # attention_inputs=question_states
